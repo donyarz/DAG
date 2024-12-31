@@ -2,7 +2,7 @@ from task import Resource, Node, Edge, Task, Job, generate_tasks, generate_resou
 import random as rand
 
 # تولید منابع
-resources = generate_resources(resource_count=5)  # تعداد منابع
+resources = generate_resources(resource_count=6)  # تعداد منابع
 
 # تولید یک تسک
 task = generate_task(task_id=1, resources=resources)
