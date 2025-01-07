@@ -1,7 +1,8 @@
 # Example usage
 from task import calculate_asap_cores, allocate_resources_to_nodes, generate_task, erdos_renyi_graph, \
     generate_accesses_and_lengths, visualize_task, get_critical_path, federated_scheduling, \
-    hyperperiod, schedule_tasks, print_task_execution_log, calculate_total_processors, generate_periodic_tasks
+    hyperperiod, schedule_tasks, print_task_execution_log, calculate_total_processors, generate_periodic_tasks, \
+    get_all_task_instances
 
 num_tasks = 2
 accesses, lengths = generate_accesses_and_lengths(num_tasks)
@@ -30,13 +31,12 @@ for task in tasks:
 
     asap_schedule = task["ASAP Schedule"]
     max_cores = task["Max Parallel Tasks"]
-
-    print("\nASAP Schedule and Core Requirements:")
-    for node, start_time in asap_schedule.items():
-        print(f"Node {node}: Start Time {start_time}, Execution Time {task['execution_times'].get(node, 'N/A')}")
-
-    print(f"Maximum Cores Required: {max_cores}")
+    print(f"Max Parallel Tasks: {max_cores}")
     print("\n")
+
+    '''print("\nASAP Schedule and Core Requirements:")
+    for node, start_time in asap_schedule.items():
+        print(f"Node {node}: Start Time {start_time}, Execution Time {task['execution_times'].get(node, 'N/A')}") '''
 
     allocations, execution_times = allocate_resources_to_nodes(task, task["task_id"], accesses, lengths)
 
@@ -56,15 +56,22 @@ for result in scheduling_result:
     print("\n")
 
 hyperperiod = hyperperiod(tasks)
-
-# چاپ هایپرپریود و تعداد نمونه‌های هر تسک
 print(f"Hyperperiod: {hyperperiod}")
-periodic_tasks = generate_periodic_tasks(tasks)
 
-for task in periodic_tasks:
-    print(f"\nTask {task['task_id']}:")  # از کلید 'task_id' استفاده کنید
-    for instance in task["instances"]:
-        print(f"  Instance -> Release Time: {instance['release_time']}, Absolute Deadline: {instance['absolute_deadline']}")
+periodic_tasks = generate_periodic_tasks(tasks)
+all_instances = get_all_task_instances(periodic_tasks)
+
+for instance in all_instances:
+    print(f"Instance ID: {instance['instance_id']}, Task ID: {instance['task_id']}")
+    print(f"  Release Time: {instance['release_time']}")
+    print(f"  Absolute Deadline: {instance['absolute_deadline']}")
+    print(f"  Nodes: {instance['nodes']}")
+    print(f"  Edges: {instance['edges']}")
+    print(f"  Period: {instance['period']}")
+    print(f"  Critical Path: {instance['critical_path']}")
+    print(f"  Allocations: {instance['allocations']}")
+   # print(f"  Processors: {instance['processors']}\n")
+    print()
 
 #scheduling_log, task_execution_log = schedule_tasks(tasks)
 #print_task_execution_log(task_execution_log)

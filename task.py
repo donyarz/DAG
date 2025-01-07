@@ -206,6 +206,10 @@ def generate_task(task_id: int, accesses: dict, lengths: dict) -> dict:
     deadline = period
     asap_schedule, max_parallel_tasks = calculate_asap_cores(nodes, edges, execution_times)
 
+    allocations, execution_times = allocate_resources_to_nodes(
+        {"nodes": nodes, "edges": edges, "execution_times": execution_times}, task_id, accesses, lengths
+    )
+
     return {
         "task_id": task_id,
         "nodes": nodes,
@@ -216,6 +220,7 @@ def generate_task(task_id: int, accesses: dict, lengths: dict) -> dict:
         "deadline": deadline,
         "accesses": accesses,
         "lengths": lengths,
+        "allocations": allocations,
         "critical_path": critical_path,
         "critical_path_length": critical_path_length,
         "ASAP Schedule": asap_schedule,
@@ -346,15 +351,12 @@ def federated_scheduling(tasks):
 #scheduling:
 def lcm(numbers):
     return reduce(lambda x, y: x * y // gcd(x, y), numbers)
-
 def hyperperiod(tasks):
     periods = [task["period"] for task in tasks]
     return lcm(periods)
-
-
 def generate_periodic_tasks(tasks):
     periodic_tasks = []
-    hyper_period = hyperperiod(tasks)  # محاسبه هایپرپریود
+    hyper_period = hyperperiod(tasks)
 
     for task in tasks:
         num_task_instances = hyper_period // task["period"]
@@ -363,31 +365,35 @@ def generate_periodic_tasks(tasks):
         instances = []
         for i in range(1, num_task_instances + 1):
             instance = task.copy()
-            release_time = task["period"] * i
-            instance["release_time"] = release_time
-            instance["absolute_deadline"] = release_time + task["period"]
+            instance = {
+                "task_id": task["task_id"],
+                "release_time": task["period"] * i,
+                "absolute_deadline": task["period"] * i + task["period"],
+                "instance_id": f"{task['task_id']}-{i}",
+                "nodes": task["nodes"],
+                "edges": task["edges"],
+                "period": task["period"],
+                "critical_path": task["critical_path"],
+                "critical_path_length": task["critical_path_length"],
+                "allocations": task["allocations"],
+                "execution_times": task["execution_times"],  # انتقال execution_times
+            }
             instances.append(instance)
 
         task["instances"] = instances
         periodic_tasks.append(task)
 
     return periodic_tasks
-
-
-
+def get_all_task_instances(periodic_tasks):
+    all_instances = []
+    for task in periodic_tasks:
+        all_instances.extend(task["instances"])
+    return all_instances
 def copy(self):
     return copy.deepcopy(self)
 
-
-# تنظیم ددلاین برای نمونه‌ها
-def set_instance_deadlines(self, release_time, period):
-    self.period = period
-    self.release_time = release_time
-    self.relative_deadline = self.period
-    self.absolute_deadline = self.relative_deadline + self.release_time
-
 def schedule_tasks(tasks):
-    h_period = hyperperiod(tasks)  # دوره زمانی
+    h_period = hyperperiod(tasks)
     current_time = 0
     executed_nodes = set()
 
@@ -406,36 +412,26 @@ def schedule_tasks(tasks):
         print(f"At time {current_time}...")
 
         ready_nodes = []
-
-        # شناسایی نودهای آماده با چک کردن وابستگی‌ها
         for task in tasks:
             task_id = task["task_id"]
 
             for node in task["nodes"]:
-                # اگر نود source یا sink باشد آن را رد می‌کنیم
                 if node == "source" or node == "sink":
                     continue
-
-                # بررسی اینکه آیا تمام پدرهای نود انجام شده‌اند
                 all_parents_completed = all(pred in executed_nodes for pred in task["edges"] if pred[1] == node)
-
-                # اگر تمام پدرهای نود اجرا شده‌اند، آن را به لیست نودهای آماده اضافه می‌کنیم
                 if all_parents_completed and node not in executed_nodes:
                     ready_nodes.append(node)
 
         print(f"  Ready Nodes: {ready_nodes}")
 
-        # اگر هیچ نودی آماده نیست
         if not ready_nodes:
             current_time += 1
             continue
 
-        # تخصیص منابع به نودهای آماده و اجرای آن‌ها
         for node in ready_nodes:
             task = next(task for task in tasks if node in task["nodes"])
             execution_time = task["execution_times"].get(node, 0)
 
-            # تخصیص منابع به نود
             for resource in task["accesses"].keys():
                 if resource_status[resource] is None:
                     resource_status[resource] = node
@@ -444,7 +440,6 @@ def schedule_tasks(tasks):
                     resource_queues[resource].put(node)
                     print(f"    Resource {resource} added to queue for Node {node}")
 
-            # اگر تمام منابع تخصیص داده شده، نود اجرا می‌شود
             if all(resource_status[res] == node for res in task["accesses"]):
                 executed_nodes.add(node)
                 scheduling_log.append((current_time, task_id, node, execution_time))
@@ -455,7 +450,6 @@ def schedule_tasks(tasks):
 
         current_time += 1
 
-        # آزادسازی منابع
         for res, current_node in resource_status.items():
             if current_node in executed_nodes:
                 next_node = resource_queues[res].get() if not resource_queues[res].empty() else None
@@ -473,21 +467,15 @@ def print_task_execution_log(task_execution_log):
         print(f"  Resources Used: {', '.join(task_log['resource_id'])}")
         print("-" * 40)
 
-
 def visualize(self, show: bool = False, save: bool = False, title: str = None, filename: str = None):
-    # تنظیمات محور و عنوان
     self.ax.set_xlabel('Time')
     self.ax.set_ylabel('Tasks')
     self.ax.set_title(title)
-
-    # محاسبه مقادیر محورها
     y_max = sum([len(task.nodes) for task in self.tasks])
     self.ax.set_xticks([i for i in range(0, self.hyperperiod, 4)] + [self.hyperperiod])
     self.ax.set_yticks([i for i in range(y_max)])
     self.ax.set_yticklabels([node.id for task in self.tasks for node in task.nodes])
     self.ax.grid(True)
-
-    # تابع برای انتخاب رنگ بر اساس Resource ID
     def map_to_color(resource_id):
         colors = {
             "R1": "red",
@@ -497,20 +485,17 @@ def visualize(self, show: bool = False, save: bool = False, title: str = None, f
             "R5": "purple",
             "R6": "orange",
         }
-        return colors.get(resource_id, "black")  # مقدار پیش‌فرض: مشکی
+        return colors.get(resource_id, "black")
 
-    # رسم هر تسک با رنگ مرتبط با منبع
     y_offset = 0
     for task in self.tasks:
         for node in task.nodes:
             start_time = node.start_time
             end_time = node.end_time
-            resource_id = node.resource_id  # فرض بر این است که هر گره منبع خود را مشخص کرده
+            resource_id = node.resource_id
             color = map_to_color(resource_id)
             self.ax.barh(y=y_offset, width=end_time - start_time, left=start_time, color=color, edgecolor="black")
             y_offset += 1
-
-    # نمایش یا ذخیره نمودار
     if show:
         plt.show()
     if save and filename:
