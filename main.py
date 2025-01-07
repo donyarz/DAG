@@ -1,8 +1,9 @@
 # Example usage
 from task import calculate_asap_cores, allocate_resources_to_nodes, generate_task, erdos_renyi_graph, \
-    generate_accesses_and_lengths, visualize_task, get_critical_path, federated_scheduling
+    generate_accesses_and_lengths, visualize_task, get_critical_path, federated_scheduling, \
+    hyperperiod, schedule_tasks, print_task_execution_log, calculate_total_processors
 
-num_tasks = 2
+num_tasks = 1
 accesses, lengths = generate_accesses_and_lengths(num_tasks)
 
 tasks = []
@@ -22,8 +23,10 @@ for task in tasks:
     print(f"period {task['period']}")
     visualize_task(task)
 
-    critical_path_length = task["Critical Path Length"]
-  #  print(f"Critical Path Length: {critical_path_length}")
+    critical_path = task["critical_path"]
+    critical_path_length = task["critical_path_length"]
+    print("Critical Path:", critical_path)
+    print("Critical Path Length:", critical_path_length)
 
     asap_schedule = task["ASAP Schedule"]
     max_cores = task["Max Parallel Tasks"]
@@ -43,10 +46,17 @@ for task in tasks:
     print("\n")
 
 scheduling_result = federated_scheduling(tasks)
+num_cores = max(result["num_processors"] for result in scheduling_result)
+core_total = calculate_total_processors(tasks)
 for result in scheduling_result:
     print(f"Task {result['task_id']}:")
     print(f"  U_i: {result['U_i']:.2f}")
-    print(f"  Number of processors assigned: {result['num_processors']}")
+    print(f"  Number of processors ASAP: {result['num_processors']}")
+    print(f"  Number of processors mi:", core_total)
     print("\n")
+
+
+scheduling_log, task_execution_log = schedule_tasks(tasks)
+print_task_execution_log(task_execution_log)
 
 
