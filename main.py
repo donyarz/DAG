@@ -1,9 +1,9 @@
 # Example usage
 from task import calculate_asap_cores, allocate_resources_to_nodes, generate_task, erdos_renyi_graph, \
     generate_accesses_and_lengths, visualize_task, get_critical_path, federated_scheduling, \
-    hyperperiod, schedule_tasks, print_task_execution_log, calculate_total_processors
+    hyperperiod, schedule_tasks, print_task_execution_log, calculate_total_processors, generate_periodic_tasks
 
-num_tasks = 1
+num_tasks = 2
 accesses, lengths = generate_accesses_and_lengths(num_tasks)
 
 tasks = []
@@ -55,8 +55,18 @@ for result in scheduling_result:
     print(f"  Number of processors mi:", core_total)
     print("\n")
 
+hyperperiod = hyperperiod(tasks)
 
-scheduling_log, task_execution_log = schedule_tasks(tasks)
-print_task_execution_log(task_execution_log)
+# چاپ هایپرپریود و تعداد نمونه‌های هر تسک
+print(f"Hyperperiod: {hyperperiod}")
+periodic_tasks = generate_periodic_tasks(tasks)
+
+for task in periodic_tasks:
+    print(f"\nTask {task['task_id']}:")  # از کلید 'task_id' استفاده کنید
+    for instance in task["instances"]:
+        print(f"  Instance -> Release Time: {instance['release_time']}, Absolute Deadline: {instance['absolute_deadline']}")
+
+#scheduling_log, task_execution_log = schedule_tasks(tasks)
+#print_task_execution_log(task_execution_log)
 
 

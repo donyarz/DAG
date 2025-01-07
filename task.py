@@ -66,14 +66,18 @@ class Edge:
 
 @dataclass
 class Task:
-    def __init__(self, id: int, period: int, wcet: int, deadline: int, nodes: list, edges: list):
+    def __init__(self, id: int, period: int, wcet: int, nodes: list, edges: list, release_time: int, \
+                 absolute_deadline: int, relative_deadline:int):
         self.id = id
         self.period = period
         self.wcet = wcet
-        self.deadline = deadline
+        self.deadline = absolute_deadline
+        self.relative_deadline = relative_deadline
+        self.release_time = release_time
         self.nodes = nodes
         self.edges = edges
         #self.U = self.wcet / self.period  # Utilization
+        self.instances = []
 
 
     def get_wcet(self) -> int:
@@ -347,6 +351,40 @@ def hyperperiod(tasks):
     periods = [task["period"] for task in tasks]
     return lcm(periods)
 
+
+def generate_periodic_tasks(tasks):
+    periodic_tasks = []
+    hyper_period = hyperperiod(tasks)  # محاسبه هایپرپریود
+
+    for task in tasks:
+        num_task_instances = hyper_period // task["period"]
+        print(f"T {task['task_id']} : {num_task_instances} instances")
+
+        instances = []
+        for i in range(1, num_task_instances + 1):
+            instance = task.copy()
+            release_time = task["period"] * i
+            instance["release_time"] = release_time
+            instance["absolute_deadline"] = release_time + task["period"]
+            instances.append(instance)
+
+        task["instances"] = instances
+        periodic_tasks.append(task)
+
+    return periodic_tasks
+
+
+
+def copy(self):
+    return copy.deepcopy(self)
+
+
+# تنظیم ددلاین برای نمونه‌ها
+def set_instance_deadlines(self, release_time, period):
+    self.period = period
+    self.release_time = release_time
+    self.relative_deadline = self.period
+    self.absolute_deadline = self.relative_deadline + self.release_time
 
 def schedule_tasks(tasks):
     h_period = hyperperiod(tasks)  # دوره زمانی
