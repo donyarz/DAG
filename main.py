@@ -23,7 +23,7 @@ for task in tasks:
    # print(f"Visualizing Task {task['task_id']}")
     print(f"period {task['period']}")
     print(f"utilization {task['utilization']}")
-    visualize_task(task)
+    #visualize_task(task)
 
     critical_path = task["critical_path"]
     critical_path_length = task["critical_path_length"]

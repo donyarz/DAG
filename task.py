@@ -294,7 +294,7 @@ def allocate_resources_to_nodes(task: dict, task_id: int, accesses: dict, length
 @dataclass
 class Processor:
     id: int
-    assigned_tasks: List[int]  # لیستی از شناسه‌های تسک‌های اختصاص داده‌شده
+    assigned_tasks: List[int]
     utilization: float = 0.0
 def calculate_total_processors(tasks):
     for task in tasks:
@@ -340,10 +340,10 @@ def federated_scheduling(tasks):
 
     # ایجاد پردازنده‌ها
     processors = [Processor(id=i + 1, assigned_tasks=[]) for i in range(total_processors)]
-    processors_state = processors.copy()  # ذخیره وضعیت پردازنده‌ها برای چاپ نهایی
+    processors_state = processors.copy()
 
     scheduling_result = []
-    remaining_processors = total_processors  # تعداد پردازنده‌های باقی‌مانده برای تخصیص به تسک‌ها
+    remaining_processors = total_processors
 
     # تخصیص تسک‌هایی که U_i بزرگ‌تر از 1 هستند
     for task in tasks:
@@ -360,31 +360,32 @@ def federated_scheduling(tasks):
             for p in assigned_processors:
                 p.assigned_tasks.append(task["task_id"])
                 p.utilization += U_i / max_parallel_tasks  # به روز رسانی استفاده از پردازنده
-            remaining_processors -= max_parallel_tasks  # کاهش تعداد پردازنده‌های باقی‌مانده
-            processors = processors[max_parallel_tasks:]  # پردازنده‌های استفاده‌شده از لیست حذف می‌شوند
+            remaining_processors -= max_parallel_tasks
+            processors = processors[max_parallel_tasks:]
         elif U_i <= 1:
             scheduling_result.append((task, U_i))
 
-    # تخصیص پردازنده‌ها به تسک‌های با U_i کمتر از 1 با استفاده از WFD
+    #  WFD
     scheduling_result.sort(key=lambda x: x[1], reverse=True)  # مرتب‌سازی بر اساس U_i
-    for task, U_i in scheduling_result:
-        if remaining_processors > 0:
-            least_loaded_processor = min(processors, key=lambda p: p.utilization)
-            least_loaded_processor.assigned_tasks.append(task["task_id"])
-            least_loaded_processor.utilization += U_i
-            remaining_processors -= 1  # کاهش تعداد پردازنده‌های باقی‌مانده
 
-    # چاپ وضعیت پردازنده‌ها
+    for task, U_i in scheduling_result:
+        # پیدا کردن پردازنده‌ای که کمترین استفاده را دارد
+        available_processors = sorted(processors, key=lambda p: p.utilization)
+        for processor in available_processors:
+            if processor.utilization + U_i <= 1:
+                processor.assigned_tasks.append(task["task_id"])
+                processor.utilization += U_i
+                break
+        else:
+            print(f"Task {task['task_id']} cannot be scheduled due to lack of resources.")
     print("\n=== Scheduling Result ===")
-    total_used_processors = 0
-    for p in processors_state:  # استفاده از processors_state برای چاپ وضعیت همه پردازنده‌ها
-        if p.assigned_tasks:
-            total_used_processors += 1
+    total_used_processors = sum(1 for p in processors_state if p.assigned_tasks)
+    for p in processors_state:
         print(f"Processor {p.id}: Assigned Tasks {p.assigned_tasks}, Utilization: {p.utilization:.2f}")
 
     print(f"\nTotal Processors Used: {total_used_processors}")
-
     return processors
+
 
 
 #scheduling:
