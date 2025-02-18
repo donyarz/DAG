@@ -202,8 +202,9 @@ def generate_task(task_id: int, accesses: dict, lengths: dict) -> dict:
     execution_times = {node: random.randint(13, 30) for node in nodes if node not in ["source", "sink"]}
     critical_path, critical_path_length = get_critical_path(nodes, edges, execution_times)
     total_execution_time = sum(execution_times.values())
-    period = int(critical_path_length / rand.uniform(0.125, 0.25))
+    period = int(critical_path_length * rand.uniform(0.125, 0.25))
     deadline = period
+    U_i = round(total_execution_time / period, 2)
     asap_schedule, max_parallel_tasks = calculate_asap_cores(nodes, edges, execution_times)
 
     allocations, execution_times = allocate_resources_to_nodes(
@@ -218,6 +219,7 @@ def generate_task(task_id: int, accesses: dict, lengths: dict) -> dict:
         "total_execution_time": total_execution_time,
         "period": period,
         "deadline": deadline,
+        "utilization": U_i,
         "accesses": accesses,
         "lengths": lengths,
         "allocations": allocations,
@@ -288,6 +290,12 @@ def allocate_resources_to_nodes(task: dict, task_id: int, accesses: dict, length
 
 
 #class algorithm:
+
+@dataclass
+class Processor:
+    id: int
+    assigned_tasks: List[int]  # لیستی از شناسه‌های تسک‌های اختصاص داده‌شده
+    utilization: float = 0.0
 def calculate_total_processors(tasks):
     for task in tasks:
         total_execution_time = task["total_execution_time"]
@@ -325,28 +333,35 @@ def calculate_asap_cores(nodes: List[int], edges: List[Tuple[int, int]], executi
 
     return asap_schedule, max_parallel_tasks
 
+
 def federated_scheduling(tasks):
+    total_processors = calculate_total_processors(tasks)
+    processors = [Processor(id=i + 1, assigned_tasks=[]) for i in range(total_processors)]
     scheduling_result = []
 
     for task in tasks:
         total_execution_time = task["total_execution_time"]
         period = task["period"]
         U_i = total_execution_time / period
-
         _, max_parallel_tasks = calculate_asap_cores(task["nodes"], task["edges"], task["execution_times"])
 
         if U_i > 1:
-            num_processors = max_parallel_tasks
+            assigned_processors = processors[:max_parallel_tasks]
+            for p in assigned_processors:
+                p.assigned_tasks.append(task["task_id"])
+            processors = processors[max_parallel_tasks:]  # حذف پردازنده‌های استفاده‌شده
         else:
-            num_processors = 1
+            scheduling_result.append((task, U_i))
 
-        scheduling_result.append({
-            "task_id": task["task_id"],
-            "U_i": U_i,
-            "num_processors": num_processors
-        })
+    # تخصیص باقیمانده تسک‌ها با WFD
+    scheduling_result.sort(key=lambda x: x[1], reverse=True)
+    for task, U_i in scheduling_result:
+        least_loaded_processor = min(processors, key=lambda p: p.utilization)
+        least_loaded_processor.assigned_tasks.append(task["task_id"])
+        least_loaded_processor.utilization += U_i
 
-    return scheduling_result
+    return processors
+
 
 #scheduling:
 def lcm(numbers):
@@ -392,7 +407,69 @@ def get_all_task_instances(periodic_tasks):
 def copy(self):
     return copy.deepcopy(self)
 
-def schedule_tasks(tasks):
+
+def schedule_tasks(tasks, num_cores):
+    ready_queue = []  # لیست تسک‌هایی که آماده اجرا هستند
+    running_tasks = {}  # نودهایی که در حال اجرا هستند (node_id -> (remaining_time, cores_used))
+    resource_locks = {}  # منابعی که قفل شده‌اند (resource -> node_id)
+    time = 0  # زمان فعلی سیستم
+    max_iterations = 1000  # حداکثر تعداد تکرار برای جلوگیری از حلقه بی‌پایان
+    iterations = 0  # شمارش تعداد تکرارها
+
+    while (tasks or running_tasks) and iterations < max_iterations:
+        completed_nodes = []
+
+        # بررسی اجرای نودهای در حال اجرا و آزادسازی منابع پس از اتمام
+        for node, (remaining_time, cores_used) in list(running_tasks.items()):
+            if remaining_time == 1:  # زمان اجرای این نود تمام شد
+                completed_nodes.append(node)
+                num_cores += cores_used  # آزاد کردن هسته‌ها
+                for res in tasks[node].get("allocations", []):
+                    resource_locks.pop(res, None)  # آزادسازی منابع
+            else:
+                running_tasks[node] = (remaining_time - 1, cores_used)
+
+        for node in completed_nodes:
+            del running_tasks[node]
+
+        # بررسی نودهای آماده برای اجرا
+        for task in tasks[:]:
+            critical_path = set(task.get("critical_path", []))
+            available_nodes = [n for n in task.get("nodes", []) if
+                               all(pred in completed_nodes for pred, _ in task.get("edges", []))]
+
+            # اولویت‌دهی به نودهای مسیر بحرانی
+            available_nodes.sort(key=lambda n: (n in critical_path, -task["execution_times"].get(n, 0)), reverse=True)
+
+            for node in available_nodes:
+                if node in running_tasks or task["execution_times"].get(node, 0) > num_cores:
+                    continue  # اگر نود در حال اجراست یا هسته کافی نیست، رد شود
+
+                # بررسی منابع موردنیاز
+                can_allocate = True
+                for res in task.get("allocations", {}).get(node, []):
+                    if res in resource_locks:
+                        can_allocate = False
+                        break
+
+                if can_allocate:
+                    # اختصاص هسته و قفل منابع
+                    cores_needed = min(num_cores, task.get("num cores ASAP", 1))  # محدود به ماکزیمم موردنیاز
+                    running_tasks[node] = (task["execution_times"].get(node, 0), cores_needed)
+                    num_cores -= cores_needed
+                    for res in task.get("allocations", {}).get(node, []):
+                        resource_locks[res] = node
+
+        time += 1  # افزایش زمان سیستم
+        iterations += 1  # افزایش شمارنده تکرار
+
+    if iterations >= max_iterations:
+        print("Max iterations reached. There might be an issue with task dependencies or resources.")
+
+    return time
+
+
+'''def schedule_tasks(tasks):
     h_period = hyperperiod(tasks)
     current_time = 0
     executed_nodes = set()
@@ -500,3 +577,4 @@ def visualize(self, show: bool = False, save: bool = False, title: str = None, f
         plt.show()
     if save and filename:
         self.fig.savefig(f"{filename}.png")
+ '''
