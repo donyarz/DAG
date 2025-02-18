@@ -202,7 +202,7 @@ def generate_task(task_id: int, accesses: dict, lengths: dict) -> dict:
     execution_times = {node: random.randint(13, 30) for node in nodes if node not in ["source", "sink"]}
     critical_path, critical_path_length = get_critical_path(nodes, edges, execution_times)
     total_execution_time = sum(execution_times.values())
-    period = int(critical_path_length * rand.uniform(0.125, 0.25))
+    period = int(critical_path_length / rand.uniform(0.125, 0.25))
     deadline = period
     U_i = round(total_execution_time / period, 2)
     asap_schedule, max_parallel_tasks = calculate_asap_cores(nodes, edges, execution_times)
@@ -336,29 +336,53 @@ def calculate_asap_cores(nodes: List[int], edges: List[Tuple[int, int]], executi
 
 def federated_scheduling(tasks):
     total_processors = calculate_total_processors(tasks)
-    processors = [Processor(id=i + 1, assigned_tasks=[]) for i in range(total_processors)]
-    scheduling_result = []
+    print(f"Total Processors: {total_processors}")
 
+    # ایجاد پردازنده‌ها
+    processors = [Processor(id=i + 1, assigned_tasks=[]) for i in range(total_processors)]
+    processors_state = processors.copy()  # ذخیره وضعیت پردازنده‌ها برای چاپ نهایی
+
+    scheduling_result = []
+    remaining_processors = total_processors  # تعداد پردازنده‌های باقی‌مانده برای تخصیص به تسک‌ها
+
+    # تخصیص تسک‌هایی که U_i بزرگ‌تر از 1 هستند
     for task in tasks:
         total_execution_time = task["total_execution_time"]
         period = task["period"]
         U_i = total_execution_time / period
         _, max_parallel_tasks = calculate_asap_cores(task["nodes"], task["edges"], task["execution_times"])
 
-        if U_i > 1:
+        if U_i > 1 and remaining_processors >= max_parallel_tasks:
+            print(f"Assigning processors to task {task['task_id']} (U_i > 1). Max parallel tasks: {max_parallel_tasks}")
+
+            # تخصیص پردازنده‌های اختصاصی به تسک
             assigned_processors = processors[:max_parallel_tasks]
             for p in assigned_processors:
                 p.assigned_tasks.append(task["task_id"])
-            processors = processors[max_parallel_tasks:]  # حذف پردازنده‌های استفاده‌شده
-        else:
+                p.utilization += U_i / max_parallel_tasks  # به روز رسانی استفاده از پردازنده
+            remaining_processors -= max_parallel_tasks  # کاهش تعداد پردازنده‌های باقی‌مانده
+            processors = processors[max_parallel_tasks:]  # پردازنده‌های استفاده‌شده از لیست حذف می‌شوند
+        elif U_i <= 1:
             scheduling_result.append((task, U_i))
 
-    # تخصیص باقیمانده تسک‌ها با WFD
-    scheduling_result.sort(key=lambda x: x[1], reverse=True)
+    # تخصیص پردازنده‌ها به تسک‌های با U_i کمتر از 1 با استفاده از WFD
+    scheduling_result.sort(key=lambda x: x[1], reverse=True)  # مرتب‌سازی بر اساس U_i
     for task, U_i in scheduling_result:
-        least_loaded_processor = min(processors, key=lambda p: p.utilization)
-        least_loaded_processor.assigned_tasks.append(task["task_id"])
-        least_loaded_processor.utilization += U_i
+        if remaining_processors > 0:
+            least_loaded_processor = min(processors, key=lambda p: p.utilization)
+            least_loaded_processor.assigned_tasks.append(task["task_id"])
+            least_loaded_processor.utilization += U_i
+            remaining_processors -= 1  # کاهش تعداد پردازنده‌های باقی‌مانده
+
+    # چاپ وضعیت پردازنده‌ها
+    print("\n=== Scheduling Result ===")
+    total_used_processors = 0
+    for p in processors_state:  # استفاده از processors_state برای چاپ وضعیت همه پردازنده‌ها
+        if p.assigned_tasks:
+            total_used_processors += 1
+        print(f"Processor {p.id}: Assigned Tasks {p.assigned_tasks}, Utilization: {p.utilization:.2f}")
+
+    print(f"\nTotal Processors Used: {total_used_processors}")
 
     return processors
 

@@ -47,12 +47,6 @@ for task in tasks:
     print("\n") '''
 
 processors = federated_scheduling(tasks)
-print("\n=== Core Assign Result ===")
-print(f"Total Processors Used: {len(processors)}")
-for processor in processors:
-    print(f"Processor {processor.id}: Assigned Tasks {processor.assigned_tasks}, Utilization: {processor.utilization:.2f}")
-
-
 
 
 hyperperiod = hyperperiod(tasks)
