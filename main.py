@@ -1,8 +1,8 @@
 # Example usage
 from task import calculate_asap_cores, allocate_resources_to_nodes, generate_task, erdos_renyi_graph, \
     generate_accesses_and_lengths, visualize_task, get_critical_path, federated_scheduling, \
-    hyperperiod, schedule_tasks, calculate_total_processors, generate_periodic_tasks, \
-    get_all_task_instances
+    hyperperiod, calculate_total_processors, generate_periodic_tasks, \
+    get_all_task_instances, map_instances_to_cores, edf_scheduling
 
 num_tasks = 2
 accesses, lengths = generate_accesses_and_lengths(num_tasks)
@@ -55,6 +55,16 @@ print(f"Hyperperiod: {hyperperiod}")
 
 periodic_tasks = generate_periodic_tasks(tasks)
 all_instances = get_all_task_instances(periodic_tasks)
+
+periodic_tasks = map_instances_to_cores(processors, periodic_tasks)
+scheduled_tasks = edf_scheduling(processors, periodic_tasks)
+
+# نمایش نتیجه
+for core, tasks in scheduled_tasks.items():
+    print(f"Core {core} execution order:")
+    for task in tasks:
+        print(f"  Instance {task['instance_id']} (Release: {task['release_time']}, Deadline: {task['absolute_deadline']})")
+
 
 '''for instance in all_instances:
     print(f"Instance ID: {instance['instance_id']}, Task ID: {instance['task_id']}")

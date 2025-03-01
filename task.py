@@ -345,7 +345,6 @@ def federated_scheduling(tasks):
     scheduling_result = []
     remaining_processors = total_processors
 
-    # تخصیص تسک‌هایی که U_i بزرگ‌تر از 1 هستند
     for task in tasks:
         total_execution_time = task["total_execution_time"]
         period = task["period"]
@@ -355,18 +354,17 @@ def federated_scheduling(tasks):
         if U_i > 1 and remaining_processors >= max_parallel_tasks:
             print(f"Assigning processors to task {task['task_id']} (U_i > 1). Max parallel tasks: {max_parallel_tasks}")
 
-            # تخصیص پردازنده‌های اختصاصی به تسک
             assigned_processors = processors[:max_parallel_tasks]
             for p in assigned_processors:
                 p.assigned_tasks.append(task["task_id"])
-                p.utilization += U_i / max_parallel_tasks  # به روز رسانی استفاده از پردازنده
+                p.utilization += U_i / max_parallel_tasks
             remaining_processors -= max_parallel_tasks
             processors = processors[max_parallel_tasks:]
         elif U_i <= 1:
             scheduling_result.append((task, U_i))
 
     #  WFD
-    scheduling_result.sort(key=lambda x: x[1], reverse=True)  # مرتب‌سازی بر اساس U_i
+    scheduling_result.sort(key=lambda x: x[1], reverse=True)
 
     for task, U_i in scheduling_result:
         # پیدا کردن پردازنده‌ای که کمترین استفاده را دارد
@@ -386,14 +384,13 @@ def federated_scheduling(tasks):
     print(f"\nTotal Processors Used: {total_used_processors}")
     return processors
 
-
-
-#scheduling:
 def lcm(numbers):
     return reduce(lambda x, y: x * y // gcd(x, y), numbers)
 def hyperperiod(tasks):
     periods = [task["period"] for task in tasks]
     return lcm(periods)
+
+
 def generate_periodic_tasks(tasks):
     periodic_tasks = []
     hyper_period = hyperperiod(tasks)
@@ -417,6 +414,7 @@ def generate_periodic_tasks(tasks):
                 "critical_path_length": task["critical_path_length"],
                 "allocations": task["allocations"],
                 "execution_times": task["execution_times"],  # انتقال execution_times
+                "assigned_processors": task.get("assigned_processors", {})
             }
             instances.append(instance)
 
@@ -430,176 +428,35 @@ def get_all_task_instances(periodic_tasks):
         all_instances.extend(task["instances"])
     return all_instances
 def copy(self):
-    return copy.deepcopy(self)
+    return copy.deepcopy(self) 
+def map_instances_to_cores(processors, periodic_tasks):
+    # ایجاد یک نگاشت از task_id به پردازنده‌های تخصیص داده شده
+    task_to_processors = {}
+    for processor in processors:
+        for task_id in processor.assigned_tasks:
+            if task_id not in task_to_processors:
+                task_to_processors[task_id] = []
+            task_to_processors[task_id].append(processor.id)
+
+    # تخصیص instance های هر تسک به همان پردازنده‌های اصلی
+    for task in periodic_tasks:
+        assigned_processors = task_to_processors.get(task["task_id"], [])
+        for instance in task["instances"]:
+            instance["assigned_processors"] = assigned_processors
+
+    return periodic_tasks
 
 
-def schedule_tasks(tasks, num_cores):
-    ready_queue = []  # لیست تسک‌هایی که آماده اجرا هستند
-    running_tasks = {}  # نودهایی که در حال اجرا هستند (node_id -> (remaining_time, cores_used))
-    resource_locks = {}  # منابعی که قفل شده‌اند (resource -> node_id)
-    time = 0  # زمان فعلی سیستم
-    max_iterations = 1000  # حداکثر تعداد تکرار برای جلوگیری از حلقه بی‌پایان
-    iterations = 0  # شمارش تعداد تکرارها
+def edf_scheduling(processors, periodic_tasks):
+    # ایجاد یک ساختار داده برای نگهداری تسک‌ها روی هر پردازنده
+    core_tasks = {p.id: [] for p in processors}
+    for task in periodic_tasks:
+        for instance in task["instances"]:
+            for core in instance["assigned_processors"]:
+                core_tasks[core].append(instance)
 
-    while (tasks or running_tasks) and iterations < max_iterations:
-        completed_nodes = []
+    # مرتب‌سازی هر لیست تسک بر اساس Absolute Deadline و Release Time
+    for core, instances in core_tasks.items():
+        instances.sort(key=lambda x: (x["absolute_deadline"], x["release_time"]))
 
-        # بررسی اجرای نودهای در حال اجرا و آزادسازی منابع پس از اتمام
-        for node, (remaining_time, cores_used) in list(running_tasks.items()):
-            if remaining_time == 1:  # زمان اجرای این نود تمام شد
-                completed_nodes.append(node)
-                num_cores += cores_used  # آزاد کردن هسته‌ها
-                for res in tasks[node].get("allocations", []):
-                    resource_locks.pop(res, None)  # آزادسازی منابع
-            else:
-                running_tasks[node] = (remaining_time - 1, cores_used)
-
-        for node in completed_nodes:
-            del running_tasks[node]
-
-        # بررسی نودهای آماده برای اجرا
-        for task in tasks[:]:
-            critical_path = set(task.get("critical_path", []))
-            available_nodes = [n for n in task.get("nodes", []) if
-                               all(pred in completed_nodes for pred, _ in task.get("edges", []))]
-
-            # اولویت‌دهی به نودهای مسیر بحرانی
-            available_nodes.sort(key=lambda n: (n in critical_path, -task["execution_times"].get(n, 0)), reverse=True)
-
-            for node in available_nodes:
-                if node in running_tasks or task["execution_times"].get(node, 0) > num_cores:
-                    continue  # اگر نود در حال اجراست یا هسته کافی نیست، رد شود
-
-                # بررسی منابع موردنیاز
-                can_allocate = True
-                for res in task.get("allocations", {}).get(node, []):
-                    if res in resource_locks:
-                        can_allocate = False
-                        break
-
-                if can_allocate:
-                    # اختصاص هسته و قفل منابع
-                    cores_needed = min(num_cores, task.get("num cores ASAP", 1))  # محدود به ماکزیمم موردنیاز
-                    running_tasks[node] = (task["execution_times"].get(node, 0), cores_needed)
-                    num_cores -= cores_needed
-                    for res in task.get("allocations", {}).get(node, []):
-                        resource_locks[res] = node
-
-        time += 1  # افزایش زمان سیستم
-        iterations += 1  # افزایش شمارنده تکرار
-
-    if iterations >= max_iterations:
-        print("Max iterations reached. There might be an issue with task dependencies or resources.")
-
-    return time
-
-
-'''def schedule_tasks(tasks):
-    h_period = hyperperiod(tasks)
-    current_time = 0
-    executed_nodes = set()
-
-    task_processor_allocations = {}
-    for task in tasks:
-        task_id = task["task_id"]
-        task_processor_allocations[task_id] = 1
-
-    resource_queues = {res: Queue() for res in tasks[0]["accesses"].keys()}
-    resource_status = {res: None for res in tasks[0]["accesses"].keys()}
-    cores_status = {}
-
-    scheduling_log = []
-
-    while current_time < h_period:
-        print(f"At time {current_time}...")
-
-        ready_nodes = []
-        for task in tasks:
-            task_id = task["task_id"]
-
-            for node in task["nodes"]:
-                if node == "source" or node == "sink":
-                    continue
-                all_parents_completed = all(pred in executed_nodes for pred in task["edges"] if pred[1] == node)
-                if all_parents_completed and node not in executed_nodes:
-                    ready_nodes.append(node)
-
-        print(f"  Ready Nodes: {ready_nodes}")
-
-        if not ready_nodes:
-            current_time += 1
-            continue
-
-        for node in ready_nodes:
-            task = next(task for task in tasks if node in task["nodes"])
-            execution_time = task["execution_times"].get(node, 0)
-
-            for resource in task["accesses"].keys():
-                if resource_status[resource] is None:
-                    resource_status[resource] = node
-                    print(f"    Resource {resource} allocated to Node {node}")
-                elif resource_status[resource] != node:
-                    resource_queues[resource].put(node)
-                    print(f"    Resource {resource} added to queue for Node {node}")
-
-            if all(resource_status[res] == node for res in task["accesses"]):
-                executed_nodes.add(node)
-                scheduling_log.append((current_time, task_id, node, execution_time))
-                print(f"    Task {task_id} Node {node} executed at time {current_time}")
-            else:
-                print(f"    Node {node} waiting for resources.")
-                scheduling_log.append((current_time, task_id, node, "Waiting for resources"))
-
-        current_time += 1
-
-        for res, current_node in resource_status.items():
-            if current_node in executed_nodes:
-                next_node = resource_queues[res].get() if not resource_queues[res].empty() else None
-                resource_status[res] = next_node
-
-    return scheduling_log
-
-
-def print_task_execution_log(task_execution_log):
-    print("\nTask Execution Log:")
-    for task_log in task_execution_log:
-        print(f"Task {task_log['task_id']}, Node {task_log['node_id']}:")
-        print(f"  Start Time: {task_log['start_time']}")
-        print(f"  End Time: {task_log['end_time']}")
-        print(f"  Resources Used: {', '.join(task_log['resource_id'])}")
-        print("-" * 40)
-
-def visualize(self, show: bool = False, save: bool = False, title: str = None, filename: str = None):
-    self.ax.set_xlabel('Time')
-    self.ax.set_ylabel('Tasks')
-    self.ax.set_title(title)
-    y_max = sum([len(task.nodes) for task in self.tasks])
-    self.ax.set_xticks([i for i in range(0, self.hyperperiod, 4)] + [self.hyperperiod])
-    self.ax.set_yticks([i for i in range(y_max)])
-    self.ax.set_yticklabels([node.id for task in self.tasks for node in task.nodes])
-    self.ax.grid(True)
-    def map_to_color(resource_id):
-        colors = {
-            "R1": "red",
-            "R2": "blue",
-            "R3": "green",
-            "R4": "yellow",
-            "R5": "purple",
-            "R6": "orange",
-        }
-        return colors.get(resource_id, "black")
-
-    y_offset = 0
-    for task in self.tasks:
-        for node in task.nodes:
-            start_time = node.start_time
-            end_time = node.end_time
-            resource_id = node.resource_id
-            color = map_to_color(resource_id)
-            self.ax.barh(y=y_offset, width=end_time - start_time, left=start_time, color=color, edgecolor="black")
-            y_offset += 1
-    if show:
-        plt.show()
-    if save and filename:
-        self.fig.savefig(f"{filename}.png")
- '''
+    return core_tasks
