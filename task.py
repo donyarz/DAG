@@ -389,31 +389,28 @@ def lcm(numbers):
 def hyperperiod(tasks):
     periods = [task["period"] for task in tasks]
     return lcm(periods)
-
-
 def generate_periodic_tasks(tasks):
     periodic_tasks = []
     hyper_period = hyperperiod(tasks)
 
     for task in tasks:
         num_task_instances = hyper_period // task["period"]
-        print(f"T {task['task_id']} : {num_task_instances} instances")
+        print(f"T {task['task_id']} : {num_task_instances + 1} instances")  # +1 چون از 0 شروع می‌کنیم
 
         instances = []
-        for i in range(1, num_task_instances + 1):
-            instance = task.copy()
+        for i in range(num_task_instances + 1):
             instance = {
                 "task_id": task["task_id"],
                 "release_time": task["period"] * i,
                 "absolute_deadline": task["period"] * i + task["period"],
-                "instance_id": f"{task['task_id']}-{i}",
+                "instance_id": f"{task['task_id']}-{i + 1}",
                 "nodes": task["nodes"],
                 "edges": task["edges"],
                 "period": task["period"],
-                "critical_path": task["critical_path"],
-                "critical_path_length": task["critical_path_length"],
-                "allocations": task["allocations"],
-                "execution_times": task["execution_times"],  # انتقال execution_times
+                "critical_path": task.get("critical_path", []),
+                "critical_path_length": task.get("critical_path_length", 0),
+                "allocations": task.get("allocations", {}),
+                "execution_times": task["execution_times"],
                 "assigned_processors": task.get("assigned_processors", {})
             }
             instances.append(instance)
@@ -422,6 +419,7 @@ def generate_periodic_tasks(tasks):
         periodic_tasks.append(task)
 
     return periodic_tasks
+
 def get_all_task_instances(periodic_tasks):
     all_instances = []
     for task in periodic_tasks:
@@ -446,17 +444,19 @@ def map_instances_to_cores(processors, periodic_tasks):
 
     return periodic_tasks
 
-
 def edf_scheduling(processors, periodic_tasks):
-    # ایجاد یک ساختار داده برای نگهداری تسک‌ها روی هر پردازنده
     core_tasks = {p.id: [] for p in processors}
+
     for task in periodic_tasks:
         for instance in task["instances"]:
             for core in instance["assigned_processors"]:
                 core_tasks[core].append(instance)
 
-    # مرتب‌سازی هر لیست تسک بر اساس Absolute Deadline و Release Time
-    for core, instances in core_tasks.items():
-        instances.sort(key=lambda x: (x["absolute_deadline"], x["release_time"]))
+    # مرتب‌سازی تنها بر اساس absolute_deadline
+    for core in core_tasks:
+        core_tasks[core] = sorted(core_tasks[core], key=lambda x: x["absolute_deadline"])
 
     return core_tasks
+
+
+
