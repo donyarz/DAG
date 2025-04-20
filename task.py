@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from math import gcd
 from functools import reduce
 from queue import Queue
-
+import heapq
 
 
 @dataclass
@@ -105,7 +105,15 @@ class Job:
     active: bool = False
 
 
-def erdos_renyi_graph() -> tuple[list[int], list[tuple[int, int]]]:
+def erdos_renyi_graph():
+    """
+    Generates a random directed acyclic graph (DAG) using Erdos-Renyi model.
+    
+    Returns:
+        tuple: (nodes, edges) where:
+            - nodes: list of node IDs
+            - edges: list of tuples (source, target)
+    """
     num_nodes = random.randint(5, 20)
     edge_probability = 0.1
 
@@ -113,6 +121,7 @@ def erdos_renyi_graph() -> tuple[list[int], list[tuple[int, int]]]:
     G = nx.DiGraph([(u, v) for (u, v) in G.edges() if u < v])
     mapping = {node: node + 1 for node in G.nodes()}
     G = nx.relabel_nodes(G, mapping)
+    
     # Add source and sink nodes
     source_node = "source"
     sink_node = "sink"
@@ -124,21 +133,45 @@ def erdos_renyi_graph() -> tuple[list[int], list[tuple[int, int]]]:
             G.add_edge(source_node, node)
         if G.out_degree(node) == 0 and node != sink_node and node != source_node:
             G.add_edge(node, sink_node)
+    
+    # Convert to lists
     nodes = list(G.nodes())
     edges = list(G.edges())
+    
+    return G
 
-    return nodes, edges
+def predecessors(g):
+    # g= erdos_renyi_graph()
+    for node in g.nodes:
+        print(f"N{node} : {g.nodes[node]["wcet"]}\n -----------------")
+        predecessors= g.predecessors(node)
+        print(f"predecessors")
+        for pred in predecessors:
+            print(f"N{pred}")
+        print(f"successors")
+        successors = g.successors(node)
+        # print(f"pred:{predecessors}")
+        # print(f"suc: {successors}")
+        for succe in successors:
+            print(f"N{succe}")
+        print("---------------------")
 
-def visualize_task(task):
-    G = nx.DiGraph()
-    G.add_nodes_from(task["nodes"])
-    G.add_edges_from(task["edges"])
+''' def assignwcet(g):
+    for node in g.nodes:
+        g.nodes[node]["wcet"]= 2 '''
+
+def visualize_task(G):
+    # G = nx.DiGraph()
+    # G.add_nodes_from(task["nodes"])
+    # G.add_edges_from(task["edges"])
+
 
     plt.figure(figsize=(8, 6))
     pos = nx.spring_layout(G, seed=42)
     nx.draw(G, pos, with_labels=True, node_color="skyblue", font_weight="bold", node_size=700, font_size=10,
             edge_color="gray")
-    plt.title(f"Task {task['task_id']} DAG", fontsize=14)
+    # plt.title(f"Task {task['task_id']} DAG", fontsize=14)
+    plt.title(f"DAG", fontsize=14)
     plt.show()
 
 def get_critical_path(nodes: list, edges: list[tuple], execution_times: dict) -> tuple[list, int]:
@@ -194,40 +227,76 @@ def generate_accesses_and_lengths(num_tasks: int, num_resources: int = 6) -> tup
 
 
 def generate_task(task_id: int, accesses: dict, lengths: dict) -> dict:
-    nodes, edges = erdos_renyi_graph()
-    if len(nodes) <= 2:
-        print(f"Skipping Task {task_id}: No nodes other than source and sink.")
+    """
+    Generates a task with random DAG structure and execution times.
+    
+    Args:
+        task_id (int): ID of the task
+        accesses (dict): Resource access information
+        lengths (dict): Resource access lengths
+        
+    Returns:
+        dict: Task information including nodes, edges, and execution times
+    """
+    try:
+        # Get the graph from erdos_renyi_graph
+        G = erdos_renyi_graph()
+        
+        # Get nodes and edges from the graph
+        nodes = list(G.nodes())
+        edges = list(G.edges())
+        
+        if len(nodes) <= 2:
+            print(f"Skipping Task {task_id}: No nodes other than source and sink.")
+            return None
+
+        # Assign execution times to nodes (excluding source and sink)
+        execution_times = {}
+        for node in nodes:
+            if node not in ["source", "sink"]:
+                execution_times[node] = random.randint(13, 30)
+                # You can also access node attributes if needed
+                # wcet = G.nodes[node].get("wcet", 0)
+        
+        # Calculate critical path and other metrics
+        critical_path, critical_path_length = get_critical_path(nodes, edges, execution_times)
+        total_execution_time = sum(execution_times.values())
+        period = int(critical_path_length / rand.uniform(0.125, 0.25))
+        deadline = period
+        U_i = round(total_execution_time / period, 2)
+        
+        # Calculate ASAP schedule and max parallel tasks
+        asap_schedule, max_parallel_tasks = calculate_asap_cores(nodes, edges, execution_times)
+
+        # Allocate resources to nodes
+        allocations, execution_times = allocate_resources_to_nodes(
+            {"nodes": nodes, "edges": edges, "execution_times": execution_times}, 
+            task_id, 
+            accesses, 
+            lengths
+        )
+
+        return {
+            "task_id": task_id,
+            "nodes": nodes,
+            "edges": edges,
+            "execution_times": execution_times,
+            "total_execution_time": total_execution_time,
+            "period": period,
+            "deadline": deadline,
+            "utilization": U_i,
+            "accesses": accesses,
+            "lengths": lengths,
+            "allocations": allocations,
+            "critical_path": critical_path,
+            "critical_path_length": critical_path_length,
+            "ASAP Schedule": asap_schedule,
+            "Max Parallel Tasks": max_parallel_tasks,
+        }
+    except Exception as e:
+        print(f"Error generating task {task_id}: {str(e)}")
         return None
 
-    execution_times = {node: random.randint(13, 30) for node in nodes if node not in ["source", "sink"]}
-    critical_path, critical_path_length = get_critical_path(nodes, edges, execution_times)
-    total_execution_time = sum(execution_times.values())
-    period = int(critical_path_length / rand.uniform(0.125, 0.25))
-    deadline = period
-    U_i = round(total_execution_time / period, 2)
-    asap_schedule, max_parallel_tasks = calculate_asap_cores(nodes, edges, execution_times)
-
-    allocations, execution_times = allocate_resources_to_nodes(
-        {"nodes": nodes, "edges": edges, "execution_times": execution_times}, task_id, accesses, lengths
-    )
-
-    return {
-        "task_id": task_id,
-        "nodes": nodes,
-        "edges": edges,
-        "execution_times": execution_times,
-        "total_execution_time": total_execution_time,
-        "period": period,
-        "deadline": deadline,
-        "utilization": U_i,
-        "accesses": accesses,
-        "lengths": lengths,
-        "allocations": allocations,
-        "critical_path": critical_path,
-        "critical_path_length": critical_path_length,
-        "ASAP Schedule": asap_schedule,
-        "Max Parallel Tasks": max_parallel_tasks,
-        }
 def generate_tasks(resources: list[str], task_count: int) -> list[dict]:
     tasks = []
     for i in range(task_count):
@@ -428,7 +497,6 @@ def get_all_task_instances(periodic_tasks):
 def copy(self):
     return copy.deepcopy(self) 
 def map_instances_to_cores(processors, periodic_tasks):
-    # ایجاد یک نگاشت از task_id به پردازنده‌های تخصیص داده شده
     task_to_processors = {}
     for processor in processors:
         for task_id in processor.assigned_tasks:
@@ -436,7 +504,6 @@ def map_instances_to_cores(processors, periodic_tasks):
                 task_to_processors[task_id] = []
             task_to_processors[task_id].append(processor.id)
 
-    # تخصیص instance های هر تسک به همان پردازنده‌های اصلی
     for task in periodic_tasks:
         assigned_processors = task_to_processors.get(task["task_id"], [])
         for instance in task["instances"]:
@@ -452,11 +519,345 @@ def edf_scheduling(processors, periodic_tasks):
             for core in instance["assigned_processors"]:
                 core_tasks[core].append(instance)
 
-    # مرتب‌سازی تنها بر اساس absolute_deadline
     for core in core_tasks:
         core_tasks[core] = sorted(core_tasks[core], key=lambda x: x["absolute_deadline"])
 
     return core_tasks
+
+
+def find_ready_nodes(nodes: list, edges: list[tuple], completed_nodes: set) -> list:
+    """
+    Finds nodes that are ready to execute based on their predecessors' completion status.
+    
+    Args:
+        nodes (list): List of all nodes in the task graph
+        edges (list[tuple]): List of edges representing dependencies between nodes
+        completed_nodes (set): Set of nodes that have already been executed
+        
+    Returns:
+        list: List of nodes that are ready to execute (all their predecessors are completed)
+        
+    Example:
+        >>> nodes = [1, 2, 3, 4]
+        >>> edges = [(1, 2), (1, 3), (2, 4), (3, 4)]
+        >>> completed_nodes = {1, 2}
+        >>> find_ready_nodes(nodes, edges, completed_nodes)
+        [3]  # Node 3 is ready because its only predecessor (1) is completed
+    """
+    if not isinstance(completed_nodes, set):
+        completed_nodes = set(completed_nodes)
+        
+    ready_nodes = []
+    
+    for node in nodes:
+        # Skip sink and already completed nodes
+        if node == "sink" or node in completed_nodes:
+            continue
+            
+        # Get all predecessors of current node
+        predecessors = [src for src, dest in edges if dest == node]
+        
+        # If node has no predecessors or all predecessors are completed
+        if not predecessors or all(pred in completed_nodes for pred in predecessors):
+            ready_nodes.append(node)
+            
+    return ready_nodes
+
+
+@dataclass
+class NodeExecution:
+    node_id: str
+    wcet: int
+    remaining_time: int
+    start_time: int = 0
+
+def print_execution_status(time: int, executing_nodes: dict, completed_nodes: set, ready_nodes: list):
+    """
+    Prints the current execution status of all nodes.
+    
+    Args:
+        time (int): Current simulation time
+        executing_nodes (dict): Dictionary of currently executing nodes
+        completed_nodes (set): Set of completed nodes
+        ready_nodes (list): List of ready nodes
+    """
+    print(f"\n=== Time {time} ===")
+    print("Executing Nodes:")
+    for node_id, node_exec in executing_nodes.items():
+        print(f"  Node {node_id}: Remaining Time = {node_exec.remaining_time}/{node_exec.wcet}")
+    
+    print("\nReady Nodes (can start execution):")
+    for node in ready_nodes:
+        print(f"  Node {node}")
+    
+    print("\nCompleted Nodes:")
+    for node in sorted(completed_nodes):
+        print(f"  Node {node}")
+
+def schedule_tasks_with_visualization(nodes: list[Node], edges: list[tuple], execution_times: dict) -> dict:
+    """
+    Schedules tasks and shows execution status at each time unit.
+    
+    Args:
+        nodes (list[Node]): List of nodes with their WCET
+        edges (list[tuple]): List of edges representing dependencies
+        execution_times (dict): Dictionary mapping node IDs to their WCET
+        
+    Returns:
+        dict: Dictionary containing scheduling information
+    """
+    current_time = 0
+    completed_nodes = set()
+    executing_nodes = {}  # {node_id: NodeExecution}
+    scheduling_log = []
+    
+    print("=== Starting Task Execution ===")
+    print(f"Total Nodes: {len(nodes)}")
+    print(f"Execution Times: {execution_times}")
+    print(f"Dependencies: {edges}")
+    
+    while len(completed_nodes) < len(nodes):
+        # Find ready nodes
+        ready_nodes = find_ready_nodes(nodes, edges, completed_nodes)
+        
+        # Start execution of ready nodes
+        for node_id in ready_nodes:
+            if node_id not in executing_nodes:
+                wcet = execution_times[node_id]
+                executing_nodes[node_id] = NodeExecution(
+                    node_id=node_id,
+                    wcet=wcet,
+                    remaining_time=wcet,
+                    start_time=current_time
+                )
+                print(f"\nNode {node_id} started execution at time {current_time}")
+        
+        # Show current status
+        print_execution_status(current_time, executing_nodes, completed_nodes, ready_nodes)
+        
+        # Update remaining time for executing nodes
+        for node_id, node_exec in list(executing_nodes.items()):
+            node_exec.remaining_time -= 1
+            
+            if node_exec.remaining_time <= 0:
+                completed_nodes.add(node_id)
+                del executing_nodes[node_id]
+                print(f"\nNode {node_id} completed at time {current_time}")
+                scheduling_log.append({
+                    'time': current_time,
+                    'node': node_id,
+                    'action': 'completed',
+                    'start_time': node_exec.start_time,
+                    'end_time': current_time
+                })
+        
+        current_time += 1
+        
+        # Break if no progress is being made
+        if not executing_nodes and not ready_nodes and len(completed_nodes) < len(nodes):
+            print(f"\nWarning: Deadlock detected at time {current_time}")
+            break
+    
+    print("\n=== Execution Summary ===")
+    print(f"Total Execution Time: {current_time}")
+    print(f"Completed Nodes: {sorted(completed_nodes)}")
+    
+    return {
+        'completed_nodes': completed_nodes,
+        'scheduling_log': scheduling_log,
+        'total_time': current_time
+    }
+
+def schedule_with_processors(task: dict, processors: list[Processor]) -> dict:
+    """
+    Schedules task nodes on allocated processors with parallel execution support using Critical Path scheduling.
+    
+    Args:
+        task (dict): Task information including nodes, edges, and execution times
+        processors (list[Processor]): List of processors allocated to the task
+        
+    Returns:
+        dict: Scheduling results including execution timeline
+    """
+    nodes = task["nodes"]
+    edges = task["edges"]
+    execution_times = task["execution_times"]
+    
+    # Visualize the task graph
+    G = nx.DiGraph()
+    G.add_nodes_from(nodes)
+    G.add_edges_from(edges)
+    visualize_task(G)
+    
+    # Find critical path
+    critical_path = get_critical_path(nodes, edges, execution_times)[0]
+    print(f"\nCritical Path: {critical_path}")
+    
+    current_time = 0
+    completed_nodes = set()
+    executing_nodes = {}  # {processor_id: (node_id, remaining_time)}
+    scheduling_log = []
+    
+    # Get number of processors allocated to this task
+    num_processors = len(processors)
+    print(f"\n=== Starting Task {task['task_id']} Execution ===")
+    print(f"Number of Processors: {num_processors}")
+    print(f"Nodes: {nodes}")
+    print(f"Execution Times: {execution_times}")
+    print(f"Dependencies: {edges}")
+    
+    # Add source and sink to completed nodes since they don't need execution
+    completed_nodes.add("source")
+    completed_nodes.add("sink")
+    
+    while len(completed_nodes) < len(nodes):
+        # Find ready nodes
+        ready_nodes = find_ready_nodes(nodes, edges, completed_nodes)
+        
+        # Prioritize nodes on critical path
+        critical_ready_nodes = [node for node in ready_nodes if node in critical_path]
+        non_critical_ready_nodes = [node for node in ready_nodes if node not in critical_path]
+        
+        # Sort critical nodes by their position in critical path
+        critical_ready_nodes.sort(key=lambda x: critical_path.index(x))
+        
+        # Combine ready nodes with critical nodes first
+        prioritized_ready_nodes = critical_ready_nodes + non_critical_ready_nodes
+        
+        # Assign ready nodes to available processors
+        available_processors = [p.id for p in processors if p.id not in executing_nodes]
+        for node_id in prioritized_ready_nodes:
+            if available_processors:  # If we have free processors
+                processor_id = available_processors.pop(0)
+                executing_nodes[processor_id] = (node_id, execution_times[node_id])
+                print(f"\nNode {node_id} started execution on processor {processor_id} at time {current_time}")
+        
+        # Show current status
+        print(f"\n=== Time {current_time} ===")
+        print("Executing Nodes:")
+        for proc_id, (node_id, remaining) in executing_nodes.items():
+            print(f"  Processor {proc_id}: Node {node_id} (Remaining Time = {remaining})")
+        
+        print("\nReady Nodes (can start execution):")
+        print("  Critical Path Nodes:", critical_ready_nodes)
+        print("  Non-Critical Nodes:", non_critical_ready_nodes)
+        
+        print("\nCompleted Nodes:")
+        # Sort completed nodes by converting to string for comparison
+        for node in sorted(completed_nodes, key=lambda x: str(x)):
+            print(f"  Node {node}")
+        
+        # Update remaining time for executing nodes
+        for processor_id, (node_id, remaining) in list(executing_nodes.items()):
+            remaining -= 1
+            executing_nodes[processor_id] = (node_id, remaining)
+            
+            if remaining <= 0:
+                completed_nodes.add(node_id)
+                del executing_nodes[processor_id]
+                print(f"\nNode {node_id} completed on processor {processor_id} at time {current_time}")
+                scheduling_log.append({
+                    'time': current_time,
+                    'node': node_id,
+                    'processor': processor_id,
+                    'action': 'completed'
+                })
+        
+        current_time += 1
+        
+        # Break if no progress is being made
+        if not executing_nodes and not ready_nodes and len(completed_nodes) < len(nodes):
+            print(f"\nWarning: Deadlock detected at time {current_time}")
+            break
+    
+    print("\n=== Execution Summary ===")
+    print(f"Total Execution Time: {current_time}")
+    print(f"Completed Nodes: {sorted(completed_nodes, key=lambda x: str(x))}")
+    
+    return {
+        'completed_nodes': completed_nodes,
+        'scheduling_log': scheduling_log,
+        'total_time': current_time
+    }
+
+def execute_task_with_processors(task: dict, processors: list[Processor]) -> dict:
+    """
+    Executes a task using the allocated processors with parallel execution support.
+    
+    Args:
+        task (dict): Task information including nodes, edges, and execution times
+        processors (list[Processor]): List of processors allocated to the task
+        
+    Returns:
+        dict: Execution results including timeline and processor utilization
+    """
+    # Schedule the task on allocated processors
+    result = schedule_with_processors(task, processors)
+    
+    # Calculate processor utilization
+    total_execution_time = result['total_time']
+    processor_utilization = {}
+    
+    for processor in processors:
+        processor_id = processor.id
+        execution_time = sum(1 for log in result['scheduling_log'] 
+                           if log['processor'] == processor_id)
+        utilization = execution_time / total_execution_time if total_execution_time > 0 else 0
+        processor_utilization[processor_id] = utilization
+    
+    result['processor_utilization'] = processor_utilization
+    return result
+
+def run_complete_example():
+    """
+    Demonstrates the complete workflow:
+    1. Generate a task
+    2. Allocate processors using federated scheduling
+    3. Execute the task with the allocated processors
+    """
+    print("=== Starting Complete Example ===")
+    
+    # Step 1: Generate task
+    print("\n1. Generating Task...")
+    num_resources = 3
+    accesses, lengths = generate_accesses_and_lengths(num_tasks=1, num_resources=num_resources)
+    task = generate_task(task_id=1, accesses=accesses, lengths=lengths)
+    
+    if task is None:
+        print("Failed to generate task")
+        return
+    
+    print(f"Generated Task {task['task_id']}:")
+    print(f"Nodes: {task['nodes']}")
+    print(f"Edges: {task['edges']}")
+    print(f"Execution Times: {task['execution_times']}")
+    print(f"Critical Path: {task['critical_path']}")
+    print(f"Critical Path Length: {task['critical_path_length']}")
+    
+    # Step 2: Allocate processors using federated scheduling
+    print("\n2. Allocating Processors...")
+    processors = federated_scheduling([task])
+    print(f"Allocated {len(processors)} processors to task {task['task_id']}")
+    for p in processors:
+        print(f"Processor {p.id}: Assigned Tasks {p.assigned_tasks}, Utilization: {p.utilization:.2f}")
+    
+    # Step 3: Execute the task
+    print("\n3. Executing Task...")
+    result = execute_task_with_processors(task, processors)
+    
+    # Print final results
+    print("\n=== Final Results ===")
+    print(f"Total Execution Time: {result['total_time']}")
+    print(f"Processor Utilization:")
+    for proc_id, util in result['processor_utilization'].items():
+        print(f"  Processor {proc_id}: {util:.2%}")
+    
+    return result
+
+# اجرای مثال کامل
+if __name__ == "__main__":
+    run_complete_example()
+
 
 
 
