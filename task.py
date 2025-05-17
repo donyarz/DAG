@@ -229,14 +229,6 @@ def generate_accesses_and_lengths(num_tasks: int, num_resources: int = 6) -> tup
 def generate_task(task_id: int, accesses: dict, lengths: dict) -> dict:
     """
     Generates a task with random DAG structure and execution times.
-    
-    Args:
-        task_id (int): ID of the task
-        accesses (dict): Resource access information
-        lengths (dict): Resource access lengths
-        
-    Returns:
-        dict: Task information including nodes, edges, and execution times
     """
     # Get the graph from erdos_renyi_graph
     G = erdos_renyi_graph()
@@ -254,8 +246,6 @@ def generate_task(task_id: int, accesses: dict, lengths: dict) -> dict:
     for node in nodes:
         if node not in ["source", "sink"]:
             execution_times[node] = random.randint(13, 30)
-            # You can also access node attributes if needed
-            # wcet = G.nodes[node].get("wcet", 0)
     
     # Calculate critical path and other metrics
     critical_path, critical_path_length = get_critical_path(nodes, edges, execution_times)
@@ -275,6 +265,17 @@ def generate_task(task_id: int, accesses: dict, lengths: dict) -> dict:
         lengths
     )
 
+    # Print resource access information
+    print(f"\n=== Resource Access Information for Task {task_id} ===")
+    for node_id, node_allocations in allocations.items():
+        print(f"\nNode {node_id} Resource Access Pattern:")
+        for section in node_allocations:
+            if isinstance(section, tuple):
+                resource_id, duration = section
+                print(f"  - {resource_id}: {duration} time units")
+            else:
+                print(f"  - Normal Section: {section} time units")
+
     return {
         "task_id": task_id,
         "nodes": nodes,
@@ -291,7 +292,7 @@ def generate_task(task_id: int, accesses: dict, lengths: dict) -> dict:
         "critical_path_length": critical_path_length,
         "ASAP Schedule": asap_schedule,
         "Max Parallel Tasks": max_parallel_tasks,
-    }
+        }
 
 def generate_tasks(resources: list[str], task_count: int) -> list[dict]:
     tasks = []
@@ -522,24 +523,7 @@ def edf_scheduling(processors, periodic_tasks):
 
 
 def find_ready_nodes(nodes: list, edges: list[tuple], completed_nodes: set) -> list:
-    """
-    Finds nodes that are ready to execute based on their predecessors' completion status.
-    
-    Args:
-        nodes (list): List of all nodes in the task graph
-        edges (list[tuple]): List of edges representing dependencies between nodes
-        completed_nodes (set): Set of nodes that have already been executed
-        
-    Returns:
-        list: List of nodes that are ready to execute (all their predecessors are completed)
-        
-    Example:
-        >>> nodes = [1, 2, 3, 4]
-        >>> edges = [(1, 2), (1, 3), (2, 4), (3, 4)]
-        >>> completed_nodes = {1, 2}
-        >>> find_ready_nodes(nodes, edges, completed_nodes)
-        [3]  # Node 3 is ready because its only predecessor (1) is completed
-    """
+
     if not isinstance(completed_nodes, set):
         completed_nodes = set(completed_nodes)
         
@@ -664,21 +648,83 @@ def schedule_tasks_with_visualization(nodes: list[Node], edges: list[tuple], exe
         'total_time': current_time
     }
 
+@dataclass
+class ResourceLock:
+    is_locked: bool = False
+    locked_by: str = None  # node_id that currently holds the lock
+    waiting_queue: Queue = None  # FIFO queue for waiting nodes
+    
+    def __init__(self):
+        self.is_locked = False
+        self.locked_by = None
+        self.waiting_queue = Queue()
+
+class ResourceManager:
+    def __init__(self):
+        self.resources: Dict[str, ResourceLock] = {}
+        self.node_resources: Dict[str, List[str]] = {}  # node_id -> list of resources it needs
+        
+    def initialize_resources(self, resource_ids: List[str]):
+        for resource_id in resource_ids:
+            self.resources[resource_id] = ResourceLock()
+    
+    def request_resource(self, node_id: str, resource_id: str) -> bool:
+        """
+        Request a resource using spin lock protocol with FIFO queue.
+        Returns True if resource is acquired, False if added to waiting queue.
+        """
+        if resource_id not in self.resources:
+            return True  # Resource doesn't exist, no need to lock
+            
+        lock = self.resources[resource_id]
+        
+        if not lock.is_locked:
+            lock.is_locked = True
+            lock.locked_by = node_id
+            return True
+        else:
+            # Add to waiting queue if not already in it
+            if node_id not in [item for item in list(lock.waiting_queue.queue)]:
+                lock.waiting_queue.put(node_id)
+            return False
+    
+    def release_resource(self, node_id: str, resource_id: str):
+        """Release a resource and give it to the next node in the queue."""
+        if resource_id not in self.resources:
+            return
+            
+        lock = self.resources[resource_id]
+        if lock.locked_by == node_id:
+            lock.is_locked = False
+            lock.locked_by = None
+            
+            # Give resource to next node in queue
+            if not lock.waiting_queue.empty():
+                next_node = lock.waiting_queue.get()
+                lock.is_locked = True
+                lock.locked_by = next_node
+    
+    def get_waiting_nodes(self, resource_id: str) -> List[str]:
+        """Get list of nodes waiting for a resource."""
+        if resource_id not in self.resources:
+            return []
+        return list(self.resources[resource_id].waiting_queue.queue)
+
 def schedule_with_processors(task: dict, processors: list[Processor]) -> dict:
     """
     Schedules task nodes on allocated processors with parallel execution support using Critical Path scheduling.
-    
-    Args:
-        task (dict): Task information including nodes, edges, and execution times
-        processors (list[Processor]): List of processors allocated to the task
-        
-    Returns:
-        dict: Scheduling results including execution timeline
+    Implements resource locking with FIFO queue and spin lock protocol.
     """
     nodes = task["nodes"]
     edges = task["edges"]
     execution_times = task["execution_times"]
     task_id = task["task_id"]
+    deadline = task["deadline"]
+    allocations = task["allocations"]
+    
+    # Initialize resource manager
+    resource_manager = ResourceManager()
+    resource_manager.initialize_resources([f"R{i+1}" for i in range(6)])  # Assuming 6 resources
     
     # Visualize the task graph
     G = nx.DiGraph()
@@ -692,7 +738,7 @@ def schedule_with_processors(task: dict, processors: list[Processor]) -> dict:
     
     current_time = 0
     completed_nodes = set()
-    executing_nodes = {}  # {processor_id: (node_id, remaining_time)}
+    executing_nodes = {}  # {processor_id: (node_id, remaining_time, current_section_index)}
     scheduling_log = []
     
     # Get number of processors allocated to this task
@@ -702,12 +748,23 @@ def schedule_with_processors(task: dict, processors: list[Processor]) -> dict:
     print(f"Nodes: {nodes}")
     print(f"Execution Times: {execution_times}")
     print(f"Dependencies: {edges}")
+    print(f"Deadline: {deadline}")
     
     # Add source and sink to completed nodes since they don't need execution
     completed_nodes.add("source")
     completed_nodes.add("sink")
     
     while len(completed_nodes) < len(nodes):
+        # Check if current time exceeds deadline
+        if current_time > deadline:
+            print(f"\nWarning: Task {task_id} missed its deadline at time {current_time} (deadline was {deadline})")
+            return {
+                'completed_nodes': completed_nodes,
+                'scheduling_log': scheduling_log,
+                'total_time': current_time,
+                'missed_deadline': True
+            }
+        
         # Find ready nodes
         ready_nodes = find_ready_nodes(nodes, edges, completed_nodes)
         
@@ -723,63 +780,112 @@ def schedule_with_processors(task: dict, processors: list[Processor]) -> dict:
         non_critical_others = []
         
         for node in non_critical_ready_nodes:
-            # Check if this node is a predecessor of any critical node
             is_predecessor = False
             for critical_node in critical_path:
                 if (node, critical_node) in edges:
                     is_predecessor = True
-                    break
-            
+            break
+
             if is_predecessor:
                 critical_predecessors.append(node)
             else:
                 non_critical_others.append(node)
         
-        # Combine ready nodes with priority order:
-        # 1. Critical path nodes
-        # 2. Non-critical nodes that are predecessors of critical nodes
-        # 3. Other non-critical nodes
+        # Combine ready nodes with priority order
         prioritized_ready_nodes = critical_ready_nodes + critical_predecessors + non_critical_others
         
         # Assign ready nodes to available processors
         available_processors = [p.id for p in processors if p.id not in executing_nodes]
         for node_id in prioritized_ready_nodes:
-            if available_processors:  # If we have free processors
-                processor_id = available_processors.pop(0)
-                executing_nodes[processor_id] = (node_id, execution_times[node_id])
-                print(f"\nNode {node_id} (Task {task_id}) started execution on processor {processor_id} at time {current_time}")
+            if available_processors:
+                # Check if node can acquire all required resources
+                node_allocations = allocations.get(node_id, [])
+                can_acquire_resources = True
+                
+                for section in node_allocations:
+                    if isinstance(section, tuple) and section[0] != "Normal":
+                        resource_id = section[0]
+                        if not resource_manager.request_resource(node_id, resource_id):
+                            can_acquire_resources = False
+                            break
+                
+                if can_acquire_resources:
+                    processor_id = available_processors.pop(0)
+                    executing_nodes[processor_id] = (node_id, execution_times[node_id], 0)
+                    print(f"\nNode {node_id} (Task {task_id}) started execution on processor {processor_id} at time {current_time}")
+        else:
+                    print(f"\nNode {node_id} is waiting for resources")
         
         # Show current status
         print(f"\n=== Time {current_time} ===")
         print("Executing Nodes:")
-        for proc_id, (node_id, remaining) in executing_nodes.items():
+        for proc_id, (node_id, remaining, section_idx) in executing_nodes.items():
             print(f"  Processor {proc_id}: Node {node_id} (Task {task_id}) (Remaining Time = {remaining})")
         
-        print("\nReady Nodes (can start execution):")
-        print("  Critical Path Nodes:", critical_ready_nodes)
-        print("  Non-Critical Predecessors of Critical Nodes:", critical_predecessors)
-        print("  Other Non-Critical Nodes:", non_critical_others)
-        
+        print("\nResource Status:")
+        for resource_id, lock in resource_manager.resources.items():
+            if lock.is_locked:
+                print(f"  Resource {resource_id}: Locked by Node {lock.locked_by}")
+                waiting_nodes = resource_manager.get_waiting_nodes(resource_id)
+                if waiting_nodes:
+                    print(f"    Waiting Queue (FIFO):")
+                    for i, waiting_node in enumerate(waiting_nodes):
+                        # Find which task this node belongs to
+                        for task in tasks:
+                            if waiting_node in task["nodes"]:
+                                print(f"      {i+1}. Node {waiting_node} (Task {task['task_id']})")
+            break
+
         print("\nCompleted Nodes:")
-        # Sort completed nodes by converting to string for comparison
         for node in sorted(completed_nodes, key=lambda x: str(x)):
             print(f"  Node {node}")
         
         # Update remaining time for executing nodes
-        for processor_id, (node_id, remaining) in list(executing_nodes.items()):
-            remaining -= 1
-            executing_nodes[processor_id] = (node_id, remaining)
+        for processor_id, (node_id, remaining, section_idx) in list(executing_nodes.items()):
+            node_allocations = allocations.get(node_id, [])
             
-            if remaining <= 0:
-                completed_nodes.add(node_id)
-                del executing_nodes[processor_id]
-                print(f"\nNode {node_id} (Task {task_id}) completed on processor {processor_id} at time {current_time}")
-                scheduling_log.append({
-                    'time': current_time,
-                    'node': node_id,
-                    'processor': processor_id,
-                    'action': 'completed'
-                })
+            if section_idx < len(node_allocations):
+                current_section = node_allocations[section_idx]
+                
+                if isinstance(current_section, tuple):
+                    section_type, section_time = current_section
+                    if section_type != "Normal":
+                        # Critical section - check if we still have the resource
+                        if resource_manager.resources[section_type].locked_by != node_id:
+                            continue  # Skip this time unit if we lost the resource
+                
+                # Update remaining time for current section
+                remaining -= 1
+                executing_nodes[processor_id] = (node_id, remaining, section_idx)
+                
+                # Check if current section is completed
+                if remaining <= 0:
+                    # Move to next section or complete node
+                    if section_idx + 1 < len(node_allocations):
+                        next_section = node_allocations[section_idx + 1]
+                        if isinstance(next_section, tuple):
+                            section_type, section_time = next_section
+                            executing_nodes[processor_id] = (node_id, node_id, section_time, section_idx + 1, current_time)
+                            print(f"\nNode {node_id} (Task {task_id}) moving to next section: {section_type} for {section_time} time units")
+                        else:
+                            executing_nodes[processor_id] = (node_id, node_id, next_section, section_idx + 1, current_time)
+                            print(f"\nNode {node_id} (Task {task_id}) moving to next section: Normal for {next_section} time units")
+                    else:
+                        # Release all resources held by this node
+                        for section in node_allocations:
+                            if isinstance(section, tuple) and section[0] != "Normal":
+                                resource_manager.release_resource(node_id, section[0])
+                        
+                        completed_nodes.add(node_id)
+                        del executing_nodes[processor_id]
+                        print(f"\nNode {node_id} (Task {task_id}) completed on processor {processor_id} at time {current_time}")
+                        scheduling_log.append({
+                            'time': current_time,
+                            'task_id': task_id,
+                            'node': node_id,
+                            'processor': processor_id,
+                            'action': 'completed'
+                        })
         
         current_time += 1
         
@@ -795,7 +901,8 @@ def schedule_with_processors(task: dict, processors: list[Processor]) -> dict:
     return {
         'completed_nodes': completed_nodes,
         'scheduling_log': scheduling_log,
-        'total_time': current_time
+        'total_time': current_time,
+        'missed_deadline': False
     }
 
 def execute_task_with_processors(task: dict, processors: list[Processor]) -> dict:
@@ -829,13 +936,7 @@ def execute_task_with_processors(task: dict, processors: list[Processor]) -> dic
 def schedule_multiple_tasks(tasks: list[dict], processors: list[Processor]) -> dict:
     """
     Schedules multiple tasks using federated scheduling and Critical Path scheduling.
-    
-    Args:
-        tasks (list[dict]): List of tasks to schedule
-        processors (list[Processor]): List of available processors
-        
-    Returns:
-        dict: Scheduling results including execution timeline
+    Implements system-wide resource management with FIFO queue and spin lock protocol.
     """
     # Use federated scheduling to allocate processors
     allocated_processors = federated_scheduling(tasks)
@@ -843,14 +944,231 @@ def schedule_multiple_tasks(tasks: list[dict], processors: list[Processor]) -> d
     for p in allocated_processors:
         print(f"Processor {p.id}: Assigned Tasks {p.assigned_tasks}, Utilization: {p.utilization:.2f}")
     
+    # Create task to processor mapping
+    task_to_processors = {}
+    for processor in allocated_processors:
+        for task_id in processor.assigned_tasks:
+            if task_id not in task_to_processors:
+                task_to_processors[task_id] = []
+            task_to_processors[task_id].append(processor.id)
+    
+    print("\n=== Task to Processor Mapping ===")
+    for task_id, processor_ids in task_to_processors.items():
+        print(f"Task {task_id} can only execute on processors: {processor_ids}")
+    
+    # Initialize system-wide resource manager
+    resource_manager = ResourceManager()
+    resource_manager.initialize_resources([f"R{i+1}" for i in range(6)])  # Assuming 6 resources
+    
     # Schedule tasks on their allocated processors
     results = {}
+    current_time = 0
+    completed_nodes = {task["task_id"]: set() for task in tasks}
+    executing_nodes = {}  # {processor_id: (task_id, node_id, remaining_time, current_section_index, section_start_time)}
+    scheduling_log = []
+    
+    # Add source and sink nodes to completed nodes for all tasks
     for task in tasks:
-        task_processors = [p for p in allocated_processors if task["task_id"] in p.assigned_tasks]
-        if task_processors:
-            print(f"\n=== Scheduling Task {task['task_id']} ===")
-            result = schedule_with_processors(task, task_processors)
-            results[task["task_id"]] = result
+        completed_nodes[task["task_id"]].add("source")
+        completed_nodes[task["task_id"]].add("sink")
+    
+    while any(len(completed_nodes[task["task_id"]]) < len(task["nodes"]) for task in tasks):
+        # Check if current time exceeds any task's deadline
+        for task in tasks:
+            if current_time > task["deadline"]:
+                print(f"\nWarning: Task {task['task_id']} missed its deadline at time {current_time} (deadline was {task['deadline']})")
+                results[task["task_id"]] = {
+                    'completed_nodes': completed_nodes[task["task_id"]],
+                    'scheduling_log': [log for log in scheduling_log if log['task_id'] == task["task_id"]],
+                    'total_time': current_time,
+                    'missed_deadline': True
+                }
+        
+        # Find ready nodes for each task
+        ready_nodes_by_task = {}
+        for task in tasks:
+            if task["task_id"] not in results or not results[task["task_id"]]["missed_deadline"]:
+                ready_nodes = find_ready_nodes(task["nodes"], task["edges"], completed_nodes[task["task_id"]])
+                ready_nodes_by_task[task["task_id"]] = ready_nodes
+        
+        # Prioritize nodes on critical paths
+        prioritized_nodes = []
+        for task in tasks:
+            if task["task_id"] not in results or not results[task["task_id"]]["missed_deadline"]:
+                task_ready_nodes = ready_nodes_by_task[task["task_id"]]
+                critical_path = task["critical_path"]
+                
+                # Prioritize critical path nodes
+                critical_ready_nodes = [node for node in task_ready_nodes if node in critical_path]
+                non_critical_ready_nodes = [node for node in task_ready_nodes if node not in critical_path]
+                
+                # Sort critical nodes by their position in critical path
+                critical_ready_nodes.sort(key=lambda x: critical_path.index(x))
+                
+                # Find non-critical nodes that are predecessors of critical nodes
+                critical_predecessors = []
+                non_critical_others = []
+                
+                for node in non_critical_ready_nodes:
+                    is_predecessor = False
+                    for critical_node in critical_path:
+                        if (node, critical_node) in task["edges"]:
+                            is_predecessor = True
+                            break
+                    
+                    if is_predecessor:
+                        critical_predecessors.append(node)
+                    else:
+                        non_critical_others.append(node)
+                
+                # Add nodes to prioritized list with task_id and priority level
+                for node in critical_ready_nodes:
+                    prioritized_nodes.append((task["task_id"], node, "Critical Path"))
+                for node in critical_predecessors:
+                    prioritized_nodes.append((task["task_id"], node, "Critical Predecessor"))
+                for node in non_critical_others:
+                    prioritized_nodes.append((task["task_id"], node, "Non-Critical"))
+        
+        # Assign ready nodes to available processors
+        for task_id, node_id, priority_level in prioritized_nodes:
+            # Get available processors for this specific task
+            task_processors = task_to_processors.get(task_id, [])
+            available_task_processors = [p_id for p_id in task_processors if p_id not in executing_nodes]
+            
+            if available_task_processors:
+                task = next(t for t in tasks if t["task_id"] == task_id)
+                # Check if node can acquire all required resources
+                node_allocations = task["allocations"].get(node_id, [])
+                can_acquire_resources = True
+                
+                for section in node_allocations:
+                    if isinstance(section, tuple) and section[0] != "Normal":
+                        resource_id = section[0]
+                        if not resource_manager.request_resource(node_id, resource_id):
+                            can_acquire_resources = False
+                            break
+                
+                if can_acquire_resources:
+                    processor_id = available_task_processors[0]
+                    # Start with the first section
+                    first_section = node_allocations[0]
+                    if isinstance(first_section, tuple):
+                        section_type, section_time = first_section
+                        executing_nodes[processor_id] = (task_id, node_id, section_time, 0, current_time)
+                    else:
+                        executing_nodes[processor_id] = (task_id, node_id, first_section, 0, current_time)
+                    print(f"\nNode {node_id} (Task {task_id}) started execution on processor {processor_id} at time {current_time}")
+                    print(f"  Priority Level: {priority_level}")
+                else:
+                    print(f"\nNode {node_id} (Task {task_id}) is waiting for resources")
+        
+        # Show current status
+        print(f"\n=== Time {current_time} ===")
+        print("Executing Nodes:")
+        for proc_id, (task_id, node_id, remaining, section_idx, start_time) in executing_nodes.items():
+            task = next(t for t in tasks if t["task_id"] == task_id)
+            node_allocations = task["allocations"].get(node_id, [])
+            current_section = node_allocations[section_idx]
+            if isinstance(current_section, tuple):
+                section_type, section_time = current_section
+                if section_type != "Normal":
+                    elapsed = current_time - start_time
+                    remaining_time = max(0, section_time - elapsed)
+                    section_info = f" (Resource {section_type}: {remaining_time}/{section_time} time units remaining)"
+                else:
+                    section_info = f" (Normal Section: {remaining}/{section_time} time units remaining)"
+            else:
+                section_info = f" (Normal Section: {remaining} time units remaining)"
+            
+            print(f"  Processor {proc_id}: Node {node_id} (Task {task_id}){section_info}")
+        
+        print("\nResource Status:")
+        for resource_id, lock in resource_manager.resources.items():
+            if lock.is_locked:
+                print(f"  {resource_id}: Locked by Node {lock.locked_by}")
+                if not lock.waiting_queue.empty():
+                    waiting = list(lock.waiting_queue.queue)
+                    print(f"    Waiting queue: {waiting}")
+            else:
+                print(f"  {resource_id}: Available")
+        
+        # Update remaining time for executing nodes
+        for processor_id, (task_id, node_id, remaining, section_idx, start_time) in list(executing_nodes.items()):
+            task = next(t for t in tasks if t["task_id"] == task_id)
+            node_allocations = task["allocations"].get(node_id, [])
+            
+            if section_idx < len(node_allocations):
+                current_section = node_allocations[section_idx]
+                
+                if isinstance(current_section, tuple):
+                    section_type, section_time = current_section
+                    if section_type != "Normal":
+                        # Check if we need to request the resource at this time
+                        elapsed = current_time - start_time
+                        if elapsed == 0:  # Request resource at the start of critical section
+                            if not resource_manager.request_resource(node_id, section_type):
+                                print(f"\nNode {node_id} (Task {task_id}) is waiting for resource {section_type}")
+                                continue
+                        # Critical section - check if we still have the resource
+                        elif resource_manager.resources[section_type].locked_by != node_id:
+                            continue  # Skip this time unit if we lost the resource
+                
+                # Update remaining time for current section
+                remaining -= 1
+                executing_nodes[processor_id] = (task_id, node_id, remaining, section_idx, start_time)
+                
+                # Check if current section is completed
+                if remaining <= 0:
+                    # Move to next section or complete node
+                    if section_idx + 1 < len(node_allocations):
+                        next_section = node_allocations[section_idx + 1]
+                        if isinstance(next_section, tuple):
+                            section_type, section_time = next_section
+                            executing_nodes[processor_id] = (task_id, node_id, section_time, section_idx + 1, current_time)
+                            print(f"\nNode {node_id} (Task {task_id}) moving to next section: {section_type} for {section_time} time units")
+                        else:
+                            executing_nodes[processor_id] = (task_id, node_id, next_section, section_idx + 1, current_time)
+                            print(f"\nNode {node_id} (Task {task_id}) moving to next section: Normal for {next_section} time units")
+                    else:
+                        # Release all resources held by this node
+                        for section in node_allocations:
+                            if isinstance(section, tuple) and section[0] != "Normal":
+                                resource_manager.release_resource(node_id, section[0])
+                        
+                        completed_nodes[task_id].add(node_id)
+                        del executing_nodes[processor_id]
+                        print(f"\nNode {node_id} (Task {task_id}) completed on processor {processor_id} at time {current_time}")
+                        scheduling_log.append({
+                            'time': current_time,
+                            'task_id': task_id,
+                            'node': node_id,
+                            'processor': processor_id,
+                            'action': 'completed'
+                        })
+        
+        current_time += 1
+        
+        # Break if no progress is being made
+        if not executing_nodes and not any(ready_nodes_by_task.values()) and \
+           any(len(completed_nodes[task["task_id"]]) < len(task["nodes"]) for task in tasks):
+            print(f"\nWarning: Deadlock detected at time {current_time}")
+            break
+    
+    # Add results for tasks that didn't miss deadline
+    for task in tasks:
+        if task["task_id"] not in results:
+            results[task["task_id"]] = {
+                'completed_nodes': completed_nodes[task["task_id"]],
+                'scheduling_log': [log for log in scheduling_log if log['task_id'] == task["task_id"]],
+                'total_time': current_time,
+                'missed_deadline': False
+            }
+    
+    print("\n=== Execution Summary ===")
+    print(f"Total Execution Time: {current_time}")
+    for task_id, result in results.items():
+        print(f"Task {task_id}: {'Completed' if not result['missed_deadline'] else 'Missed Deadline'}")
+        print(f"  Completed Nodes: {sorted(result['completed_nodes'], key=lambda x: str(x))}")
     
     return results
 
@@ -883,6 +1201,7 @@ def run_complete_example():
             print(f"Critical Path: {task['critical_path']}")
             print(f"Critical Path Length: {task['critical_path_length']}")
             print(f"Utilization: {task['utilization']:.2f}")
+            print(f"Deadline: {task['deadline']}")
     
     if not tasks:
         print("Failed to generate any tasks")
@@ -890,7 +1209,7 @@ def run_complete_example():
     
     print(f"\nGenerated {len(tasks)} tasks:")
     for task in tasks:
-        print(f"Task {task['task_id']}: U = {task['utilization']:.2f}")
+        print(f"Task {task['task_id']}: U = {task['utilization']:.2f}, Deadline = {task['deadline']}")
     
     # Step 2: Allocate processors using federated scheduling
     print("\n2. Allocating Processors...")
@@ -905,7 +1224,8 @@ def run_complete_example():
     # Print final results
     print("\n=== Final Results ===")
     for task_id, result in results.items():
-        print(f"Task {task_id}: Total Time = {result['total_time']}")
+        status = "Missed Deadline" if result.get('missed_deadline', False) else "Completed Successfully"
+        print(f"Task {task_id}: Total Time = {result['total_time']}, Status = {status}")
     
     return results
 
