@@ -171,8 +171,8 @@ class TaskInstance:  # Represents a single job (instance) of a periodic task
 
 # --- Graph Generation and Task Properties ---
 def erdos_renyi_graph():
-    num_nodes_to_generate = random.randint(5, 10)  # Reduced max nodes for easier debugging
-    edge_probability = 0.3  # Increased edge probability for denser graphs
+    num_nodes_to_generate = random.randint(5, 20)  # Reduced max nodes for easier debugging
+    edge_probability = 0.1  # Increased edge probability for denser graphs
 
     G = nx.erdos_renyi_graph(num_nodes_to_generate, edge_probability, directed=True)
     # Ensure it's a DAG and relabel nodes
@@ -391,7 +391,13 @@ def generate_base_task(task_id: int, accesses_data: dict, lengths_data: dict) ->
 
     # Adjust period calculation for tighter deadlines for schedulability testing
     # Period should be related to critical path, but not too loose.
-    period = int(critical_path_length * rand.uniform(1.2, 2.5))  # Adjust factor for schedulability
+    critical_pathth = critical_path_length
+    x = 1
+    while x < critical_pathth:
+        x *= 2
+
+    period = rand.choice([x, 2 * x])
+   # period = int(critical_path_length * rand.uniform(1.2, 2.5))  # Adjust factor for schedulability
     if period == 0: period = 1  # Minimum period
 
     deadline = period  # Implicit deadline
@@ -499,8 +505,21 @@ class Processor:
 def calculate_total_processors(tasks: List[BaseTask]):
     # This calculation is for initial allocation, based on base task properties
     sum_utilization = sum(t.utilization() for t in tasks)
-    m_total = math.ceil(sum_utilization)  # A simple heuristic, can be improved
-    if m_total == 0: m_total = 1  # At least one processor
+
+    # Define U_norm as per your new requirement (a value between 0.1 and 1)
+    # If U_norm is a fixed system parameter, pass it as an argument.
+    # If it's a random value per simulation, generate it here.
+    # Based on your previous code snippet: U_norm = rand.uniform(0.1, 1)
+    U_norm = rand.uniform(0.1, 1)  # Example: Randomly choose a normalized utilization factor
+
+    # Apply the new formula: sum_utilization / U_norm, then ceiling
+    m_total = math.ceil(sum_utilization / U_norm)
+
+    if m_total == 0:
+        m_total = 1  # Ensure at least one processor even if utilization is extremely low
+
+    print(
+        f"DEBUG: Sum Utilization: {sum_utilization:.2f}, U_norm: {U_norm:.2f}, Calculated Total Processors (m_total): {m_total}")
     return m_total
 
 
@@ -672,7 +691,7 @@ def schedule_multiple_tasks_periodic(base_tasks: List[BaseTask], system_processo
 
     # Scheduling state variables
     current_time = 0
-    # active_jobs: Jobs that have been released and are not yet completed
+    # active_jobs_pq: Jobs that have been released and are not yet completed
     # Stored as (absolute_deadline, release_time, instance_id, TaskInstance object) for priority queue
     active_jobs_pq: List[Tuple[int, int, str, TaskInstance]] = []
     heapq.heapify(active_jobs_pq)  # Min-heap based on absolute_deadline
@@ -681,7 +700,6 @@ def schedule_multiple_tasks_periodic(base_tasks: List[BaseTask], system_processo
     executing_nodes: Dict[int, Tuple[str, str, int, int, int, TaskInstance]] = {}
 
     # Map job_id to its TaskInstance object for quick lookup
-    # job_id = f"T{task_id}-J{instance_num}"
     job_map: Dict[str, TaskInstance] = {instance.instance_id: instance for instance in all_instances}
 
     # Keep track of the results for each job
@@ -689,9 +707,7 @@ def schedule_multiple_tasks_periodic(base_tasks: List[BaseTask], system_processo
                                     for inst in all_instances}
 
     overall_schedulable = True  # Flag for final schedulability determination
-    scheduling_log = []
-    # --- Main Simulation Loop (over Hyperperiod) ---
-    # ... (بالای تابع schedule_multiple_tasks_periodic)
+    scheduling_log = []  # Initialize scheduling log
 
     # --- Main Simulation Loop (over Hyperperiod) ---
     while True:  # Keep as True for now, exit conditions inside
@@ -701,7 +717,6 @@ def schedule_multiple_tasks_periodic(base_tasks: List[BaseTask], system_processo
         jobs_released_this_cycle = False
         for instance in all_instances:
             if instance.release_time == current_time and not instance.is_completed and not instance.deadline_missed:
-                # Check if this instance is already in active_jobs_pq (shouldn't be, but a safeguard)
                 if not any(job_tuple[2] == instance.instance_id for job_tuple in active_jobs_pq):
                     heapq.heappush(active_jobs_pq,
                                    (instance.absolute_deadline, instance.release_time, instance.instance_id, instance))
@@ -722,8 +737,8 @@ def schedule_multiple_tasks_periodic(base_tasks: List[BaseTask], system_processo
         for deadline, release, inst_id, job_obj in list(active_jobs_pq):  # Iterate over a copy
             if current_time > job_obj.absolute_deadline and not job_obj.is_completed and not job_obj.deadline_missed:
                 job_obj.deadline_missed = True
-                job_obj.is_schedulable = False
-                job_obj.is_completed = True  # Mark as completed (failed) for further processing
+                job_obj.is_schedulable = False  # Mark the instance as unschedulable
+                job_obj.is_completed = True  # Consider it 'completed' for processing, but failed
                 overall_schedulable = False
                 job_results[inst_id]['deadline_missed'] = True
                 job_results[inst_id]['total_time'] = current_time
@@ -732,122 +747,161 @@ def schedule_multiple_tasks_periodic(base_tasks: List[BaseTask], system_processo
 
                 # If this job was executing, remove it and release resources
                 for proc_id, exec_data in list(executing_nodes.items()):
-                    if exec_data[0] == inst_id:
+                    if exec_data[0] == inst_id:  # exec_data[0] is instance_id
                         print(f"DEBUG: Removing {inst_id} (node {exec_data[1]}) from P{proc_id} due to deadline miss.")
                         del executing_nodes[proc_id]
-                        resource_manager.release_all_resources_for_node(
-                            exec_data[1])  # Release resources held by this specific node
-                        break  # Node found and processed
+                        # Release any resources held by this node
+                        # Note: exec_data[1] is the node_id string for ResourceManager
+                        resource_manager.release_all_resources_for_node(exec_data[1])
                 jobs_to_remove_from_active_pq.append((deadline, release, inst_id, job_obj))
 
         if jobs_to_remove_from_active_pq:
-            # Rebuild active_jobs_pq without missed deadline jobs (safer than direct removal from heap)
             active_jobs_pq = [(d, r, i, j) for d, r, i, j in active_jobs_pq if not j.deadline_missed]
             heapq.heapify(active_jobs_pq)
-            print(f"DEBUG: Active jobs PQ size after deadline check: {len(active_jobs_pq)}")
 
         # --- Loop Termination Condition ---
-        # If all jobs in all_instances are either completed or missed their deadline
-        # AND there are no nodes currently executing on processors, then we can exit.
         all_jobs_processed = True
         for job_obj in all_instances:
             if not job_obj.is_completed and not job_obj.deadline_missed:
                 all_jobs_processed = False
                 break
 
+        # Terminate if all jobs are processed OR if we've passed hyperperiod and no jobs are executing.
         if all_jobs_processed and not executing_nodes and current_time >= hyper_period:
             print(f"\n--- Simulation End Condition Met: All jobs processed or hyperperiod reached. ---")
             break
 
-        # This condition helps prevent infinite loops if something goes wrong and no work is done.
-        # But we need to make sure it doesn't prematurely exit.
-        if not executing_nodes and not active_jobs_pq and current_time > 0 and current_time < hyper_period:
-            print(
-                f"WARNING: No executing nodes and no active jobs in PQ at time {current_time}. Potential early exit or a stall.")
-            # Consider adding a specific counter for idle cycles to prevent breaking too early
-            # if new jobs might arrive later in the hyperperiod.
-            # For now, let's allow it to run till hyperperiod or all jobs processed.
+        # Fail-safe break: if no work can be done, and no new jobs will arrive within hyperperiod.
+        # This prevents infinite loops if scheduling stalls before hyperperiod end.
+        if not executing_nodes and not active_jobs_pq and current_time >= hyper_period:
+            print(f"WARNING: No executing nodes and no active jobs in PQ. Hyperperiod reached. Terminating.")
+            break
 
-        # 3. Select jobs/nodes to execute for this time step (EDF)
+        # 3. Select jobs/nodes to execute for this time step (EDF & CPC)
         available_processors = [p.id for p in system_processors if p.id not in executing_nodes]
-        candidates_for_scheduling = []  # (priority_value, job_obj, node_id, processor_id)
+        candidates_for_scheduling = []  # List of (job_priority_value, node_priority_value, job_obj, node_id, processor_id)
 
-        print(f"DEBUG: Available Processors this cycle: {available_processors}")
-        print(f"DEBUG: Active Jobs in PQ ({len(active_jobs_pq)}): {[inst_id for _, _, inst_id, _ in active_jobs_pq]}")
+        nodes_currently_running_or_selected = set()
+        for _, node_id_exec, _, _, _, _ in executing_nodes.values():
+            nodes_currently_running_or_selected.add(node_id_exec)
 
-        # Iterate through active_jobs_pq (prioritized by deadline)
+            # Iterate through active_jobs_pq (prioritized by deadline/EDF)
         for _, _, _, job_obj in active_jobs_pq:
             if job_obj.is_completed or job_obj.deadline_missed:
-                continue  # Skip jobs that are already done or failed
+                continue
 
-            # Check if this job has ready nodes that can be scheduled
+            # Find processors assigned to this job's base task ID
+            # This is crucial for federated scheduling to ensure jobs only run on their allocated cores.
+            processors_assigned_to_this_job_base_task = []
+            for p in system_processors:
+                if job_obj.task_id in p.assigned_tasks:
+                    processors_assigned_to_this_job_base_task.append(p.id)
+
+            # Only consider processors that are both available system-wide AND assigned to this task's base ID
+            suitable_and_available_processors_for_this_job = [p_id for p_id in available_processors if
+                                                              p_id in processors_assigned_to_this_job_base_task]
+
+            if not suitable_and_available_processors_for_this_job:
+                continue  # No suitable and available processor for this job right now
+
+            # Find ready nodes for this job instance
             ready_nodes_for_job = find_ready_nodes(job_obj.nodes, job_obj.edges, job_obj.completed_nodes)
             actual_ready_nodes = [n for n in ready_nodes_for_job if n not in ["source", "sink"]]
 
             if not actual_ready_nodes:
-                # print(f"DEBUG: Job {job_obj.instance_id} has no ready nodes at time {current_time}.")
-                continue  # No ready nodes for this job, move to next job in PQ
+                continue
 
-            # Iterate through available processors to find a match for this job's nodes
-            # We want to assign the highest priority job's ready node to *any* available processor
-            # that is assigned to its base task.
+                # --- Apply Critical Path Scheduling (CPC) for node selection within this job ---
+            critical_path_for_job = job_obj.critical_path
+            edges_for_job = job_obj.edges
 
-            # Find processors assigned to this job's base task ID
-            processors_for_this_job_base_task = []
-            for p in system_processors:
-                if job_obj.task_id in p.assigned_tasks:
-                    processors_for_this_job_base_task.append(p.id)
+            critical_ready_nodes = [node for node in actual_ready_nodes if node in critical_path_for_job]
+            non_critical_ready_nodes = [node for node in actual_ready_nodes if node not in critical_path_for_job]
 
-            # Find overlap with truly available processors
-            suitable_processors = [p_id for p_id in available_processors if p_id in processors_for_this_job_base_task]
+            # Sort critical nodes by position on CP
+            critical_ready_nodes.sort(key=lambda x: critical_path_for_job.index(x))
 
-            if not suitable_processors:
-                # print(f"DEBUG: Job {job_obj.instance_id} (ready nodes: {actual_ready_nodes}) cannot find suitable free processor.")
-                continue  # No suitable processor for this job, move to next job in PQ
+            critical_predecessors = []
+            non_critical_others = []
 
-            # For simplicity, pick the first ready node and first suitable processor
-            node_to_schedule = actual_ready_nodes[0]
-            processor_to_assign = suitable_processors[0]  # Pick the first one
+            for node in non_critical_ready_nodes:
+                is_predecessor = False
+                for critical_node in critical_path_for_job:
+                    if (node, critical_node) in edges_for_job:
+                        is_predecessor = True
+                        break
+                if is_predecessor:
+                    critical_predecessors.append(node)
+                else:
+                    non_critical_others.append(node)
 
-            # Check if node can acquire its initial resource if needed (pre-check for assignment)
-            node_allocations = job_obj.allocations.get(node_to_schedule, [])
-            first_section_needs_resource = False
-            first_section_resource_id = None
-            if node_allocations:
-                potential_first_section = node_allocations[0]
-                if isinstance(potential_first_section, tuple) and potential_first_section[0] != "Normal":
-                    first_section_needs_resource = True
-                    first_section_resource_id = potential_first_section[0]
+            # Combine ready nodes with priority order for this job:
+            prioritized_nodes_for_job = critical_ready_nodes + critical_predecessors + non_critical_others
 
-            can_acquire_initial_resource = True
-            if first_section_needs_resource:
-                if not resource_manager.request_resource(node_to_schedule,
-                                                         first_section_resource_id):  # Node ID for request
-                    can_acquire_initial_resource = False
-                    print(
-                        f"DEBUG: Node {node_to_schedule} ({job_obj.instance_id}) needs {first_section_resource_id} but it's not available for initial assignment.")
+            # --- Iterate through prioritized nodes to find one that can be scheduled ---
+            for node_to_schedule_candidate in prioritized_nodes_for_job:
+                # If this node is already running or selected for this cycle, skip it.
+                if node_to_schedule_candidate in nodes_currently_running_or_selected:
+                    continue
 
-            if can_acquire_initial_resource:
-                # We've found a job and a node for it, and a processor. Assign it.
-                first_section = job_obj.allocations[node_to_schedule][0]
+                    # Try to assign to the first suitable and available processor
+                processor_to_assign = None
+                if suitable_and_available_processors_for_this_job:  # Check if list is not empty
+                    processor_to_assign = suitable_and_available_processors_for_this_job[0]  # Pick the first available
+
+                if processor_to_assign is None:
+                    continue  # No suitable and available processor found for this node, try next node in prioritized list
+
+                # Resource acquisition check for the first section of this node
+                node_allocations = job_obj.allocations.get(node_to_schedule_candidate, [])
+                first_section_needs_resource = False
+                first_section_resource_id = None
+                if node_allocations:
+                    potential_first_section = node_allocations[0]
+                    if isinstance(potential_first_section, tuple) and potential_first_section[0] != "Normal":
+                        first_section_needs_resource = True
+                        first_section_resource_id = potential_first_section[0]
+
+                can_acquire_initial_resource = True
+                if first_section_needs_resource:
+                    if not resource_manager.request_resource(node_to_schedule_candidate, first_section_resource_id):
+                        can_acquire_initial_resource = False
+                        # If resource not acquired, this node can't start this cycle, so continue
+                        # print(f"DEBUG: Node {node_to_schedule_candidate} ({job_obj.instance_id}) cannot acquire initial resource {first_section_resource_id}. Waiting.")
+                        continue  # Skip this node candidate, try next one.
+
+                if can_acquire_initial_resource:
+                    # FOUND A MATCH! Add to candidates_for_scheduling.
+                    candidates_for_scheduling.append(
+                        (job_obj.absolute_deadline, job_obj, node_to_schedule_candidate, processor_to_assign))
+
+                    # Mark this node as selected for this cycle to prevent re-selection
+                    nodes_currently_running_or_selected.add(node_to_schedule_candidate)
+
+                    # Mark this processor as taken for this cycle (remove from available pool)
+                    available_processors.remove(processor_to_assign)
+
+                    # Break from `prioritized_nodes_for_job` loop as we assigned a node for this job
+                    break
+
+                    # Assign all selected candidates to processors
+        # Sort candidates by their deadline again (as a safeguard for EDF)
+        candidates_for_scheduling.sort(key=lambda x: x[0])
+
+        for _, job_obj_selected, node_to_schedule_selected, processor_to_assign_selected in candidates_for_scheduling:
+            # Check if processor is still available (it should be, as we removed it from `available_processors` above)
+            if processor_to_assign_selected not in executing_nodes:  # This check is redundant with correct `available_processors` management
+                first_section = job_obj_selected.allocations[node_to_schedule_selected][0]
                 section_time = first_section[1] if isinstance(first_section, tuple) else first_section
                 section_idx = 0
 
-                executing_nodes[processor_to_assign] = (
-                     job_obj.instance_id, node_to_schedule, section_time, section_idx, current_time, job_obj)
-                # Corrected line:
+                executing_nodes[processor_to_assign_selected] = (
+                job_obj_selected.instance_id, node_to_schedule_selected, section_time, section_idx, current_time,
+                job_obj_selected)
                 print(
-                    f"INFO: Node {node_to_schedule} ({job_obj.instance_id}) started execution on processor {processor_to_assign} at time {current_time}. (First section: {first_section})")
-                # Update available processors list for this cycle
-                available_processors.remove(processor_to_assign)
+                    f"INFO: Node {node_to_schedule_selected} ({job_obj_selected.instance_id}) started execution on processor {processor_to_assign_selected} at time {current_time}. (First section: {first_section})")
 
-                # If no more processors available, break from job assignment loop
-                if not available_processors:
-                    break
-                    # Else (if cannot acquire initial resource), this job/node remains in active_jobs_pq for next cycle
-            # and is skipped for this current processor slot.
-
-        # 4. Show Current Status (for debugging)
+        # --- Show Current Status (for debugging) ---
         print(f"\n=== Time {current_time} === (Hyperperiod: {hyper_period})")
         print("Executing Nodes:")
         if not executing_nodes:
@@ -884,7 +938,7 @@ def schedule_multiple_tasks_periodic(base_tasks: List[BaseTask], system_processo
                 print(f"  {resource_id}: Available")
 
         # 5. Update Executing Nodes: Perform Work or Advance
-        nodes_to_remove_from_executing_this_cycle = []  # Processors whose nodes complete entirely
+        nodes_to_remove_from_executing_this_cycle = []
 
         for processor_id, (inst_id, node_id, remaining_orig, section_idx_orig, start_time_orig, job_obj) in list(
                 executing_nodes.items()):
@@ -892,7 +946,7 @@ def schedule_multiple_tasks_periodic(base_tasks: List[BaseTask], system_processo
 
             if section_idx_orig >= len(node_allocations):
                 print(
-                    f"WARNING: Node {node_id} ({inst_id}) on P{processor_id} is in invalid section ({section_idx_orig}). Marking for removal.")
+                    f"WARNING: Node {node_id} ({inst_id}) on P{processor_id} is in invalid section. Marking for removal.")
                 nodes_to_remove_from_executing_this_cycle.append(processor_id)
                 continue
 
@@ -905,24 +959,19 @@ def schedule_multiple_tasks_periodic(base_tasks: List[BaseTask], system_processo
             if isinstance(current_section_def, tuple) and current_section_def[0] != "Normal":
                 resource_id = current_section_def[0]
 
-                # If node is in a resource phase but doesn't hold the resource:
                 if not resource_manager.is_resource_locked_by(node_id, resource_id):
-                    # Try to acquire it. If not, it's busy-waiting.
                     if not resource_manager.request_resource(node_id, resource_id):
                         print(
                             f"DEBUG: Node {node_id} ({inst_id}) on P{processor_id} is busy-waiting for {resource_id} (already on processor).")
                         progress_made_this_cycle = False
-                        # No decrement of `remaining`
-                        # Update tuple to reflect potentially stalled start_time if tracking it this way
-                        # executing_nodes[processor_id] = (inst_id, node_id, remaining_orig, section_idx_orig, start_time_orig, job_obj)
-                        continue  # Skip decrementing time and advancement for this node this cycle
+                        executing_nodes[processor_id] = (
+                        inst_id, node_id, remaining_orig, section_idx_orig, start_time_orig, job_obj)
+                        continue
                     else:
                         print(
                             f"DEBUG: Node {node_id} ({inst_id}) on P{processor_id} just ACQUIRED {resource_id} (was waiting on processor).")
-                        # Resource acquired NOW. Proceed to decrement time.
 
-                # If resource is held AND it's the last time unit for this section, release it.
-                if current_remaining == 1:  # Last unit of execution for this section
+                if current_remaining == 1:
                     if resource_manager.is_resource_locked_by(node_id, resource_id):
                         acquired_by_node = resource_manager.release_resource(node_id, resource_id)
                         print(f"DEBUG: Node {node_id} ({inst_id}) on P{processor_id} released resource {resource_id}.")
@@ -941,35 +990,27 @@ def schedule_multiple_tasks_periodic(base_tasks: List[BaseTask], system_processo
                 print(
                     f"DEBUG: Node {node_id} ({inst_id}) on P{processor_id} finished section {section_idx_orig} at time {current_time}.")
 
-                # Mark this node as completed for this job instance
                 job_obj.completed_nodes.add(node_id)
 
-                # Move to next section or complete node
                 if section_idx_orig + 1 < len(node_allocations):
                     next_section_def = node_allocations[section_idx_orig + 1]
                     next_section_time = next_section_def[1] if isinstance(next_section_def, tuple) else next_section_def
 
-                    # Update the tuple for the next section
                     executing_nodes[processor_id] = (
                     inst_id, node_id, next_section_time, section_idx_orig + 1, current_time + 1, job_obj)
                     print(
                         f"DEBUG: Node {node_id} ({inst_id}) on P{processor_id} moving to next section: {next_section_def} for {next_section_time} units.")
                 else:
-                    # Node is completely finished
                     print(
                         f"DEBUG: Node {node_id} ({inst_id}) on P{processor_id} completed ENTIRELY at time {current_time}.")
-                    # Release any remaining resources held by this node (as a final safeguard)
                     resource_manager.release_all_resources_for_node(node_id)
 
-                    # Mark job instance's overall completion
                     job_obj.is_completed = True
                     job_results[inst_id]['completed'] = True
-                    job_results[inst_id]['total_time'] = current_time  # Record completion time
+                    job_results[inst_id]['total_time'] = current_time
 
-                    nodes_to_remove_from_executing_this_cycle.append(
-                        processor_id)  # Mark processor for removal from executing_nodes
+                    nodes_to_remove_from_executing_this_cycle.append(processor_id)
 
-                    # Log this completion event
                     scheduling_log.append({
                         'time': current_time,
                         'task_id': job_obj.task_id,
@@ -979,25 +1020,19 @@ def schedule_multiple_tasks_periodic(base_tasks: List[BaseTask], system_processo
                         'action': 'completed_node_and_job_part'
                     })
             else:
-                # Section not completed, update remaining time in tuple
-                # The start_time here should remain the same as the start of the current section
                 executing_nodes[processor_id] = (
                 inst_id, node_id, current_remaining, section_idx_orig, start_time_orig, job_obj)
 
-        # Apply removals (from executing_nodes) after iterating to avoid modification issues
         for proc_id_to_remove in nodes_to_remove_from_executing_this_cycle:
-            if proc_id_to_remove in executing_nodes:  # Defensive check
+            if proc_id_to_remove in executing_nodes:
                 del executing_nodes[proc_id_to_remove]
-                # The job_obj's completed_nodes and is_completed status would have been updated above.
 
         current_time += 1
 
-    # --- Final Execution Summary ---
     total_simulation_time = current_time
 
     final_results_summary = {}
-
-    overall_system_schedulable = True  # Re-evaluate system-wide schedulability based on final job_results
+    overall_system_schedulable = True
 
     for task in base_tasks:
         task_id = task.id
@@ -1009,19 +1044,15 @@ def schedule_multiple_tasks_periodic(base_tasks: List[BaseTask], system_processo
             'overall_time_simulated': total_simulation_time
         }
 
-    # Analyze all job_results to populate final_results_summary
     for inst_id, res in job_results.items():
         job_obj = job_map[inst_id]
         final_results_summary[job_obj.task_id]['total_instances'] += 1
 
-        # A job is considered successfully completed if its `is_completed` flag is True
-        # AND its `deadline_missed` flag is False.
         if job_obj.is_completed and not job_obj.deadline_missed:
             final_results_summary[job_obj.task_id]['completed_instances'] += 1
         else:
             final_results_summary[job_obj.task_id]['missed_deadline_instances'] += 1
-            final_results_summary[job_obj.task_id][
-                'schedulable'] = False  # If any instance misses, task is unschedulable
+            final_results_summary[job_obj.task_id]['schedulable'] = False
             overall_system_schedulable = False
 
     print("\n=== Overall Simulation Summary ===")
