@@ -1076,7 +1076,7 @@ def run_complete_example():
     # 1. Generate Base Tasks (Task templates)
     print("\n1. Generating Base Tasks...")
     num_base_tasks = 2  # Number of distinct periodic task types
-    num_resources = 3
+    num_resources = 6
 
     base_tasks_list = generate_tasks(num_base_tasks=num_base_tasks, num_resources=num_resources)
 
